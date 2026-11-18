@@ -247,6 +247,33 @@ void RunAndCheck(AgcDriver::VulkanDevice& device, std::span<const std::uint32_t>
     Check(item, results);
 }
 
+bool ProbeSamplerBias(AgcDriver::VulkanDevice& device) {
+    constexpr std::uint32_t lane = 2;
+    struct Probe {
+        std::span<const std::uint32_t> code;
+        Case item;
+        std::uint32_t expected;
+    };
+    constexpr std::array probes{
+        Probe{Code, {0x100u, 1u, 0xfffu, 1u, 0}, 2u},
+        Probe{Code, {0x100u, 1u, 0xfffu, 1u, -96}, 1u},
+        Probe{Code, {0x100u, 1u, 0xfffu, 1u, -128}, 1u},
+        Probe{Code, {0u, 1u, 0xfffu, 1u, -96}, 1u},
+        Probe{GradientCode, {0x100u, 1u, 0xfffu, 1u, -96}, 1u},
+        Probe{GradientCode, {0x200u, 1u, 0xfffu, 1u, -96}, 2u},
+    };
+    std::printf("image_sample_d_cl sampler-bias probe, %s lane\n", device.Target().shaderImageMinLod ? "shader-clamp" : "image-view");
+    bool matches = true;
+    for (const auto& probe : probes) {
+        FillInput();
+        Run(device, probe.code, probe.item, false);
+        const float level = std::bit_cast<float>(Buffer[lane * Words + ResultWord]) * 255.0f;
+        std::printf("%s, %s: lane %u returned %.6f, expected %u\n", Describe(probe.item).c_str(), probe.code.data() == Code.data() ? "full shader" : "gradient-only shader", lane, level, probe.expected);
+        matches &= std::lround(level) == static_cast<long>(probe.expected);
+    }
+    return matches;
+}
+
 struct Pairing {
     std::uint32_t minLod;
     std::uint32_t baseLevel;
@@ -392,6 +419,7 @@ int main(int argc, char** argv) {
         }
         CheckSpirvLanes(device->Target());
         FillTexture();
+        if (argc > 1 && std::strcmp(argv[1], "--lod-bias-probe") == 0) return ProbeSamplerBias(*device) ? 0 : 1;
         for (const auto& item : {Case{0u, 0u}, Case{0x200u, 0u}, Case{0x200u, 1u}, Case{0x200u, 0u, 0x300u}}) RunAndCheck(*device, Code, 6u, item, false);
         if (!shaderClamp) RunAndCheck(*device, GradientCode, 1u, Case{0x100u, 1u, 0xfffu, 1u, -128}, false);
         if (!shaderClamp) RunAndCheck(*device, GradientCode, 1u, Case{0x200u, 0u, 0xfffu, 1u, -256}, false);
