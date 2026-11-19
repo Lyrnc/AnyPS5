@@ -123,6 +123,29 @@ void CheckStoresRacingAReadAreReported(Arena& arena) {
     }
 }
 
+void CheckProtectedZeroPages(Arena& arena) {
+    constexpr auto begin = 2 * Page - 13;
+    constexpr auto count = Page + 38;
+    auto* guarded = arena.memory + 2 * Page;
+    for (const DWORD protection : {PAGE_NOACCESS, PAGE_READWRITE | PAGE_GUARD}) {
+        arena.Recommit();
+        Require(Accessible(arena.memory + begin, count), "fresh fixture was not readable");
+        DWORD previous = 0;
+        Require(VirtualProtect(guarded, Page, protection, &previous) != 0, "cannot protect a fresh page");
+        std::vector<std::byte> expected(count);
+        std::fill_n(expected.begin() + 13, Page, std::byte{0x77});
+        Require(EqualsCommittedUnsynced(arena.At(begin), expected), "comparison did not skip a protected known-zero page");
+        Require(!Accessible(arena.memory + begin, count), "comparison kept a protected known-zero page readable");
+        expected.back() = std::byte{1};
+        Require(!EqualsCommittedUnsynced(arena.At(begin), expected), "comparison missed a difference beside a protected known-zero page");
+
+        ReadCommittedUnsynced(arena.At(begin), expected);
+        Require(Zero(expected), "snapshot did not zero a protected page and its unwritten neighbors");
+        MEMORY_BASIC_INFORMATION memory{};
+        Require(VirtualQuery(guarded, &memory, sizeof(memory)) == sizeof(memory) && memory.Protect == protection, "snapshot or comparison changed the page protection");
+    }
+}
+
 }
 #endif
 
@@ -135,6 +158,7 @@ int main() {
         }
         Arena arena;
         CheckReadsLeaveNeverWrittenPagesUnreported(arena);
+        CheckProtectedZeroPages(arena);
         CheckStoresRacingAReadAreReported(arena);
         std::cout << "guest read known-zero tests passed\n";
         return 0;

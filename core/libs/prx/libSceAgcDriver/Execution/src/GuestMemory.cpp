@@ -3736,6 +3736,26 @@ void CopyGuestBytes(void* destination, const void* source, std::size_t bytes) {
 namespace {
 
 #ifdef _WIN32
+bool readableMapping(const MEMORY_BASIC_INFORMATION& memory) {
+    return memory.State == MEM_COMMIT && (memory.Protect & (PAGE_GUARD | PAGE_NOACCESS)) == 0 && readableProtection(memory.Protect & 0xffu);
+}
+
+template <class Visit>
+void visitCommittedZero(std::uintptr_t source, std::size_t bytes, Visit&& visit) {
+    const auto end = source + bytes;
+    for (auto cursor = source; cursor < end;) {
+        MEMORY_BASIC_INFORMATION memory{};
+        require(VirtualQuery(reinterpret_cast<const void*>(cursor), &memory, sizeof(memory)) == sizeof(memory), "cannot query known-zero guest memory");
+        const auto base = reinterpret_cast<std::uintptr_t>(memory.BaseAddress);
+        require(base <= cursor && cursor - base < memory.RegionSize, "invalid known-zero guest memory region");
+        const auto count = std::min<std::size_t>(end - cursor, memory.RegionSize - (cursor - base));
+        const bool readable = readableMapping(memory);
+        if (!readable) ForgetPages(cursor, count);
+        visit(cursor - source, count, readable);
+        cursor += count;
+    }
+}
+
 bool readPages(std::byte* destination, std::uint64_t source, std::size_t bytes) {
     SIZE_T copied = 0;
     if (ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(source), destination, bytes, &copied) != 0) {
@@ -3759,8 +3779,7 @@ void visitReadablePages(std::byte* destination, std::uint64_t source, std::size_
         const auto chunk = std::min<std::size_t>(bytes - offset, PageBytes - static_cast<std::size_t>(cursor % PageBytes));
         MEMORY_BASIC_INFORMATION memory{};
         require(VirtualQuery(reinterpret_cast<const void*>(cursor), &memory, sizeof(memory)) == sizeof(memory), "cannot query guest memory after a failed committed read");
-        const bool readable = memory.State == MEM_COMMIT && (memory.Protect & (PAGE_GUARD | PAGE_NOACCESS)) == 0 && readableProtection(memory.Protect & 0xffu);
-        visit(offset, chunk, readable && readPages(destination + offset, cursor, chunk));
+        visit(offset, chunk, readableMapping(memory) && readPages(destination + offset, cursor, chunk));
         offset += chunk;
     }
 }
@@ -3770,7 +3789,9 @@ void copyCommittedBytes(std::byte* destination, std::uint64_t source, std::size_
 #ifdef _WIN32
     splitKnownZero(static_cast<std::uintptr_t>(source), bytes, [&](std::size_t at, std::size_t length, bool zero) {
         if (zero) {
-            std::memset(destination + at, 0, length);
+            visitCommittedZero(source + at, length, [&](std::size_t offset, std::size_t count, bool) {
+                std::memset(destination + at + offset, 0, count);
+            });
             return;
         }
         if (GuestArena::GuestArenaCopyOwned_nid_no_patch(source + at, destination + at, length)) return;
@@ -3793,7 +3814,9 @@ bool equalsCommittedBytes(std::uint64_t address, const std::byte* expected, std:
     splitKnownZero(static_cast<std::uintptr_t>(address), bytes, [&](std::size_t at, std::size_t span, bool zero) {
         if (!equal) return;
         if (zero) {
-            equal = zeroBytes(expected + at, span);
+            visitCommittedZero(address + at, span, [&](std::size_t offset, std::size_t length, bool read) {
+                if (read && equal) equal = zeroBytes(expected + at + offset, length);
+            });
             return;
         }
         bool same = false;
