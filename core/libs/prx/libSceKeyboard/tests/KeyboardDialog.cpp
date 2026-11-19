@@ -72,6 +72,17 @@ int main() {
     ModalDialogClose_nid_postfix();
     ModalDialogReset_nid_postfix();
 
+    input.HandleEvent(Key(SDL_KEYDOWN, SDL_SCANCODE_B), Window);
+    Require(Read(data) == 1 && data[0].key_code[0] == 0x05, "the key press did not reach the title before the idle dialog");
+    OpenDialog();
+    input.UpdateDialogCapture(ModalDialogCapturesInput_nid_postfix());
+    Require(Read(data) == 1 && data[0].length == 1 && data[0].key_code[0] == 0, "the idle dialog did not release the held key");
+    input.UpdateDialogCapture(ModalDialogCapturesInput_nid_postfix());
+    Require(Read(data) == 0, "the idle dialog released the key twice");
+    ModalDialogClose_nid_postfix();
+    input.UpdateDialogCapture(ModalDialogCapturesInput_nid_postfix());
+    ModalDialogReset_nid_postfix();
+
     ModalDialogSetPresenter_nid_postfix(false);
     Require(sceKeyboardClose(KEYBOARD_HANDLE) == KEYBOARD_OK, "close failed");
 }

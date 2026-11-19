@@ -3,6 +3,17 @@
 #include "prx/libSceIme/include/ModalDialog.hpp"
 
 #include "SDL_keyboard.h"
+#include <utility>
+
+bool KeyboardInput::UpdateDialogCapture(bool captures) {
+    const bool wasSuspended = std::exchange(suspended, captures);
+    if (captures && !wasSuspended) {
+        KeyboardInputEvent release{};
+        release.resetKeys = true;
+        KeyboardPublishInput_nid_postfix(release);
+    }
+    return captures;
+}
 
 void KeyboardInput::HandleEvent(const SDL_Event& event, unsigned windowId) {
     KeyboardInputEvent input{};
@@ -10,13 +21,7 @@ void KeyboardInput::HandleEvent(const SDL_Event& event, unsigned windowId) {
         case SDL_KEYDOWN:
         case SDL_KEYUP:
             if (event.key.windowID != windowId || !focused || event.key.repeat != 0) return;
-            if (ModalDialogCapturesInput_nid_postfix()) {
-                if (suspended) return;
-                suspended = true;
-                input.resetKeys = true;
-                break;
-            }
-            suspended = false;
+            if (UpdateDialogCapture(ModalDialogCapturesInput_nid_postfix())) return;
             if (event.key.keysym.scancode <= SDL_SCANCODE_UNKNOWN || event.key.keysym.scancode > SDL_SCANCODE_RGUI) return;
             input.keyCode = static_cast<std::uint16_t>(event.key.keysym.scancode);
             input.pressed = event.type == SDL_KEYDOWN;

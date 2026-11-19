@@ -173,15 +173,36 @@ void DialogMotionAndWheel(MouseInput& input, std::int32_t handle) {
     input.HandleEvent(Wheel(3, 2), 3);
     auto drained = Drain(handle);
     Require(drained.wheel == 2, "the wheel does not reach the title without a dialog");
+    input.HandleEvent(Button(3, SDL_BUTTON_LEFT, true), 3);
+    Require(Drain(handle).buttons == 1, "the button press did not reach the title before opening the dialog");
     OpenDialog();
     input.HandleEvent(Motion(3, 5, 5), 3);
     input.HandleEvent(Wheel(3, 2), 3);
     drained = Drain(handle);
-    Require(drained.count == 0, "motion or wheel reached the title while a dialog was shown");
+    Require(drained.count == 1 && drained.buttons == 0, "the dialog did not release the held mouse button before the next click");
+    Require(drained.x == 0 && drained.y == 0 && drained.wheel == 0, "motion or wheel reached the title while a dialog was shown");
+    input.HandleEvent(Button(3, SDL_BUTTON_LEFT, false), 3);
+    Require(Drain(handle).count == 0, "a second release reached the title while a dialog was shown");
     ModalDialogClose_nid_postfix();
     input.HandleEvent(Motion(3, 4, 6), 3);
     drained = Drain(handle);
     Require(drained.x == 8 && drained.y == 12, "motion does not reach the title after the dialog closed");
+    ModalDialogReset_nid_postfix();
+    ModalDialogSetPresenter_nid_postfix(false);
+}
+
+void DialogWithoutMouseEvents(MouseInput& input, std::int32_t handle) {
+    ModalDialogSetPresenter_nid_postfix(true);
+    input.HandleEvent(Button(3, SDL_BUTTON_LEFT, true), 3);
+    Require(Drain(handle).buttons == 1, "the button press did not reach the title before the idle dialog");
+    OpenDialog();
+    input.UpdateDialogCapture(ModalDialogCapturesInput_nid_postfix());
+    const auto released = Drain(handle);
+    Require(released.count == 1 && released.buttons == 0, "the idle dialog did not release the held mouse button");
+    input.UpdateDialogCapture(ModalDialogCapturesInput_nid_postfix());
+    Require(Drain(handle).count == 0, "the idle dialog released the mouse button twice");
+    ModalDialogClose_nid_postfix();
+    input.UpdateDialogCapture(ModalDialogCapturesInput_nid_postfix());
     ModalDialogReset_nid_postfix();
     ModalDialogSetPresenter_nid_postfix(false);
 }
@@ -283,6 +304,7 @@ int main() {
     DialogMotionAndWheel(input, handle);
     DialogButtonPress(input, handle);
     DialogButtonRelease(input, handle);
+    DialogWithoutMouseEvents(input, handle);
     CaptureDecision(input, handle);
     CaptureApplied(input);
     std::puts("mouse input tests passed");

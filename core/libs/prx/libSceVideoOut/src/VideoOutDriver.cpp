@@ -824,6 +824,9 @@ void VideoOutDriver::presentLoop(std::stop_token token, std::promise<void>& star
             }
 
             const bool quit = OnMainThread([&] {
+                const bool dialogCaptures = ModalDialogCapturesInput_nid_postfix();
+                mouseInput->UpdateDialogCapture(dialogCaptures);
+                keyboardInput->UpdateDialogCapture(dialogCaptures);
                 SDL_Event event;
                 while (SDL_PollEvent(&event)) {
                     if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_CLOSE) windowCloseSeen = true;

@@ -6,12 +6,23 @@
 #include "SDL_video.h"
 #include <cmath>
 #include <cstdio>
+#include <utility>
+
+bool MouseInput::UpdateDialogCapture(bool captures) {
+    const bool wasSuspended = std::exchange(suspended, captures);
+    if (captures && !wasSuspended) {
+        MouseInputEvent release{};
+        release.resetButtons = true;
+        MousePublishInput_nid_no_patch(release);
+    }
+    return captures;
+}
 
 void MouseInput::HandleEvent(const SDL_Event& event, unsigned windowId) {
     MouseInputEvent input{};
     switch (event.type) {
         case SDL_MOUSEMOTION:
-            if (event.motion.windowID != windowId || !focused || padOwnsMouse || ModalDialogCapturesInput_nid_postfix()) return;
+            if (event.motion.windowID != windowId || !focused || padOwnsMouse || UpdateDialogCapture(ModalDialogCapturesInput_nid_postfix())) return;
             input.x = scaled(event.motion.xrel, scaleX, remainderX);
             input.y = scaled(event.motion.yrel, scaleY, remainderY);
             input.countsX = event.motion.xrel;
@@ -21,13 +32,7 @@ void MouseInput::HandleEvent(const SDL_Event& event, unsigned windowId) {
         case SDL_MOUSEBUTTONUP:
             if (event.button.windowID != windowId || !focused) return;
             if (padOwnsMouse && event.type == SDL_MOUSEBUTTONDOWN) return;
-            if (ModalDialogCapturesInput_nid_postfix()) {
-                if (suspended) return;
-                suspended = true;
-                input.resetButtons = true;
-                break;
-            }
-            suspended = false;
+            if (UpdateDialogCapture(ModalDialogCapturesInput_nid_postfix())) return;
             switch (event.button.button) {
                 case SDL_BUTTON_LEFT: input.button = 1; break;
                 case SDL_BUTTON_RIGHT: input.button = 2; break;
@@ -37,7 +42,7 @@ void MouseInput::HandleEvent(const SDL_Event& event, unsigned windowId) {
             input.pressed = event.type == SDL_MOUSEBUTTONDOWN;
             break;
         case SDL_MOUSEWHEEL:
-            if (event.wheel.windowID != windowId || !focused || padOwnsMouse || ModalDialogCapturesInput_nid_postfix()) return;
+            if (event.wheel.windowID != windowId || !focused || padOwnsMouse || UpdateDialogCapture(ModalDialogCapturesInput_nid_postfix())) return;
             input.wheel = event.wheel.y;
             input.tilt = event.wheel.x;
             if (event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED) {

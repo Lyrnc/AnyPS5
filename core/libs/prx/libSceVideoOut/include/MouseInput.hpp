@@ -7,6 +7,7 @@
 class MouseInput {
 public:
     void HandleEvent(const SDL_Event& event, unsigned windowId);
+    bool UpdateDialogCapture(bool captures);
     void SetPresentation(std::uint32_t sourceWidth, std::uint32_t sourceHeight, std::uint32_t presentedWidth, std::uint32_t presentedHeight);
     bool CaptureWanted(bool allowed) const;
     void UpdateCapture(bool allowed);
