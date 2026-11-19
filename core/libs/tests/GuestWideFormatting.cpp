@@ -376,6 +376,11 @@ static void CheckSwprintf() {
     Require(swprintf_nid_postfix(buffer, 3, u"abc") < 0, "swprintf terminator does not fit");
     buffer[0] = u'x';
     Require(swprintf_nid_postfix(buffer, 0, u"a") < 0 && buffer[0] == u'x', "swprintf zero size");
+    errno = 0;
+    Require(swprintf_nid_postfix(buffer, 0, u"a") == -1 && errno == 0 && buffer[0] == u'x', "swprintf zero size keeps errno");
+    Require(swprintf_nid_postfix(buffer, 0, u"%s", "") == 0 && errno == 0 && buffer[0] == u'x', "swprintf zero size with an empty result");
+    Require(swprintf_nid_postfix(nullptr, 0, u"") == 0 && swprintf_nid_postfix(nullptr, 0, u"a") == -1 && errno == 0, "swprintf null buffer of size zero");
+    Require(swprintf_nid_postfix(buffer, 0, u"%c", 0x80) == -1 && errno == 86 && buffer[0] == u'x', "swprintf zero size still reports EILSEQ");
     Require(swprintf_nid_postfix(nullptr, 8, u"a") < 0, "swprintf null buffer");
     Require(swprintf_nid_postfix(buffer, 5, u"%ls", u"abcd") == 4 && buffer == std::u16string(u"abcd"), "swprintf exact fit");
     char16_t wide[16];
@@ -628,6 +633,17 @@ static void CheckNanSign() {
     Require(buffer == std::u16string(u"[nan   ][  -nan][-NAN][-inf][+NAN]"), "NaN flags");
 }
 
+static void CheckUnwritableBuffer() {
+    auto* unmapped = reinterpret_cast<char16_t*>(std::uintptr_t{0x10});
+    errno = 0;
+    Require(swprintf_nid_postfix(unmapped, 8, u"%d", 42) == -1 && errno == 22, "swprintf rejects an unmapped buffer");
+    errno = 0;
+    Require(swprintf_nid_postfix(unmapped, 2, u"%d", 42) == -1 && errno == 22, "swprintf rejects an unmapped buffer it would truncate into");
+    errno = 0;
+    Require(swprintf_nid_postfix(unmapped, 8, u"[%s]", "\xf0\x9f\x98\x80") == -1 && errno == 22,
+        "swprintf rejects an unmapped buffer before reporting an encoding error");
+}
+
 int main() {
     set_constraint_handler_s_nid_postfix(reinterpret_cast<void*>(&RecordViolation));
     CheckAlternateOctalZero();
@@ -637,6 +653,7 @@ int main() {
     CheckPointer();
     CheckCount();
     CheckSwprintf();
+    CheckUnwritableBuffer();
     CheckFloat();
     CheckSecureWideBoundary();
     CheckSecureWideConstraints();
