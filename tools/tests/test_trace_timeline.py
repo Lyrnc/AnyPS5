@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -131,6 +132,32 @@ class TimelineTests(unittest.TestCase):
     def test_layout_orders_rows_by_thread_name(self):
         laid = trace_timeline.layout(trace_timeline_slices(self.items), 0, 10000, 1000)
         self.assertEqual(laid["threads"], ["presenter", "queue worker"])
+
+    def test_nested_slices_remain_visible_when_clipped_to_equal_bounds(self):
+        trace = trace_of([
+            complete(2, "Draw.Prepare", 0, 10000),
+            complete(2, "Shader.Compile", 1000, 8000),
+            complete(2, "Shader.Translate", 2000, 6000),
+            complete(1, "Driver.Packet", 3000, 4000),
+        ])
+        slices = trace_timeline.window_slices(trace, 2000, 8000)
+        laid = trace_timeline.layout(slices, 2000, 8000, 400)
+        svg = ET.fromstring(trace_timeline.svg(laid))
+        positions = {bar.findtext("{*}title"): int(bar.attrib["y"]) for bar in svg.findall("{*}rect")}
+        row_height = trace_timeline.ROW_HEIGHT
+        self.assertEqual(positions, {
+            "Draw.Prepare (6.000 ms)": 2,
+            "Shader.Compile (6.000 ms)": row_height + 2,
+            "Shader.Translate (6.000 ms)": 2 * row_height + 2,
+            "Driver.Packet (4.000 ms)": 3 * row_height + 2,
+        })
+        self.assertEqual(int(svg.attrib["height"]), 4 * row_height)
+        self.assertEqual([(label.text, int(label.attrib["y"])) for label in svg.findall("{*}text")],
+                         [("presenter", 13), ("queue worker", 3 * row_height + 13)])
+
+        limited = trace_timeline.layout(slices, 2000, 8000, 400, max_slices=2)
+        self.assertEqual(limited["left_out"], 2)
+        self.assertEqual(ET.fromstring(trace_timeline.svg(limited)).attrib["height"], str(3 * row_height))
 
     def test_threads_that_share_a_name_get_their_own_rows(self):
         names = [{"name": "thread_name", "ph": "M", "ts": 0, "pid": 7, "tid": tid, "args": {"name": "shader prepare"}} for tid in (1, 2)]
