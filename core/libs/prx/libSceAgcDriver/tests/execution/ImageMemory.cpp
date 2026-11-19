@@ -28,6 +28,7 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -415,20 +416,11 @@ private:
     void* data = nullptr;
 };
 
-bool StorageImages(const Context& context, TextureDetiler& detiler, Hooks& native, bool sharing) {
-    GuestBlock guest;
-    std::vector<std::shared_ptr<StorageTexture>> textures;
-    std::vector<VkImage> images;
-    for (std::size_t i = 0; i < ImageCount; ++i) {
-        auto texture = StorageTexture::Create(context, detiler, Resource(guest.Address(i)), 0);
-        images.push_back(texture->Image());
-        textures.push_back(std::move(texture));
-    }
-    const bool covered = native.CheckBindings(images, sharing);
-    Buffer readback(context, ImageCount * PixelBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+void CheckStorageContents(const Context& context, std::span<const VkImage> images, std::span<const std::uint32_t> values, std::size_t firstWrite) {
+    Buffer readback(context, images.size() * PixelBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
     CommandBatch batch(context);
     const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    for (std::size_t i = 0; i < ImageCount; ++i) {
+    for (std::size_t i = firstWrite; i < images.size(); ++i) {
         VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
         barrier.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
         barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -440,11 +432,11 @@ bool StorageImages(const Context& context, TextureDetiler& detiler, Hooks& nativ
         barrier.subresourceRange = range;
         context.Function<PFN_vkCmdPipelineBarrier>("vkCmdPipelineBarrier")(batch.Handle(), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
         VkClearColorValue clear{};
-        clear.uint32[0] = 0x13579bdfu + static_cast<std::uint32_t>(i) * 0x1020304u;
+        clear.uint32[0] = values[i];
         context.Function<PFN_vkCmdClearColorImage>("vkCmdClearColorImage")(batch.Handle(), images[i], VK_IMAGE_LAYOUT_GENERAL, &clear, 1, &range);
     }
     RecordMemoryBarrier(context, batch.Handle(), VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
-    for (std::size_t i = 0; i < ImageCount; ++i) {
+    for (std::size_t i = 0; i < images.size(); ++i) {
         VkBufferImageCopy region{};
         region.bufferOffset = i * PixelBytes;
         region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
@@ -455,17 +447,49 @@ bool StorageImages(const Context& context, TextureDetiler& detiler, Hooks& nativ
     batch.SubmitAndWait();
     readback.Invalidate();
     const auto bytes = readback.Bytes();
-    for (std::size_t i = 0; i < ImageCount; ++i) {
-        const auto expected = 0x13579bdfu + static_cast<std::uint32_t>(i) * 0x1020304u;
+    for (std::size_t i = 0; i < images.size(); ++i) {
         for (std::size_t pixel = 0; pixel < Side * Side; ++pixel) {
             std::uint32_t actual = 0;
             std::memcpy(&actual, bytes.data() + i * PixelBytes + pixel * sizeof(actual), sizeof(actual));
-            Require(actual == expected, "image memory: writing one storage image changed a sibling's pixels");
+            Require(actual == values[i], "image memory: writing one storage image changed a sibling's pixels");
         }
     }
+}
+
+bool StorageImages(const Context& context, TextureDetiler& detiler, Hooks& native, bool sharing) {
+    GuestBlock guest;
+    std::vector<std::shared_ptr<StorageTexture>> textures;
+    std::vector<VkImage> images;
+    std::array<std::uint32_t, ImageCount> values{};
+    for (std::size_t i = 0; i < ImageCount; ++i) {
+        auto texture = StorageTexture::Create(context, detiler, Resource(guest.Address(i)), 0);
+        images.push_back(texture->Image());
+        textures.push_back(std::move(texture));
+        values[i] = 0x13579bdfu + static_cast<std::uint32_t>(i) * 0x1020304u;
+    }
+    const bool covered = native.CheckBindings(images, sharing);
+    CheckStorageContents(context, images, values, 0);
+
+    const auto releasedImage = images.back();
+    const auto releasedBinding = native.BindingOf(releasedImage);
+    const bool oneSharedBlock = std::all_of(images.begin(), images.end() - 1, [&](VkImage image) {
+        return native.BindingOf(image).memory == releasedBinding.memory;
+    });
+    textures.back().reset();
+    Require(native.Destroyed(releasedImage), "image memory: the old storage image survived its completed batch");
+    textures.back() = StorageTexture::Create(context, detiler, Resource(guest.Address(ImageCount - 1)), 0);
+    images.back() = textures.back()->Image();
+    const auto replacement = native.BindingOf(images.back());
+    if (oneSharedBlock) {
+        Require(replacement.memory == releasedBinding.memory && replacement.offset == releasedBinding.offset, "image memory: a replacement did not reuse the released range of the shared block");
+    }
+    const bool replacementCovered = native.CheckBindings(images, sharing);
+    values.back() = 0xfe320189u;
+    CheckStorageContents(context, images, values, ImageCount - 1);
+    std::printf("image memory: replacing one storage image preserved %zu live siblings (same shared range: %s)\n", ImageCount - 1, oneSharedBlock ? "yes" : "unavailable");
     textures.clear();
     native.CheckReleased();
-    return covered;
+    return covered && replacementCovered;
 }
 
 bool CachePressure(Context context, Hooks& native) {
