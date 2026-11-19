@@ -7817,14 +7817,21 @@ void storageRefreshTests(const Device& device, Recorder& recorder, bool watched)
         const Context& context;
         void* block;
         std::uint64_t address;
+        bool watchedAllocation;
         ~Unregister() {
             {
                 GuestAllocations::Mutation mutation;
                 mutation.Remove(block);
             }
             HostImportFor(context, address, bytes);
+            if (watchedAllocation) ReleaseWatched(block, bytes);
+#ifdef _WIN32
+            else VirtualFree(block, 0, MEM_RELEASE);
+#else
+            else std::free(block);
+#endif
         }
-    } unregister{base, block, address};
+    } unregister{base, block, address, watched};
     const auto* import = HostImportFor(base, address, bytes);
     if (import == nullptr) {
         std::cout << "host import of the storage refresh block refused: storage refresh not tested\n";
@@ -7947,6 +7954,7 @@ void storageRefreshTests(const Device& device, Recorder& recorder, bool watched)
         Require(watched ? memoryHolds({0, 0, 255, 255}, 65536, 0x33) : memoryHolds({255, 0, 0, 255}), "results dead under new clear keys were stored");
     }
     recorder.Sync();
+    recorder.FlushDeferredReleases();
 }
 
 bool addressShadowTests(const Device& device, Recorder& recorder) {
@@ -10128,6 +10136,11 @@ void writeBackPaddingTests(const Device& device, Recorder& recorder, bool watche
                 }
                 HostImportFor(context, address, bytes);
                 if (watched) ReleaseWatched(block, bytes);
+#ifdef _WIN32
+                else VirtualFree(block, 0, MEM_RELEASE);
+#else
+                else std::free(block);
+#endif
             }
         } unregister{base, block, blockAddress, bytes, watched};
         if (HostImportFor(base, blockAddress, bytes) == nullptr) {
@@ -10207,6 +10220,7 @@ void writeBackPaddingTests(const Device& device, Recorder& recorder, bool watche
             }
         }
         recorder.Sync();
+        recorder.FlushDeferredReleases();
     }
     if (!failures.empty()) throw std::runtime_error("write-back padding:\n" + failures);
     std::cout << "write-back padding" << (watched ? " (watched)" : "") << ": ok\n";
