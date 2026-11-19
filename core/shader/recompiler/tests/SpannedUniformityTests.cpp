@@ -32,12 +32,14 @@ enum Id : std::uint32_t {
     PhysicalPointer,
     Snapshot,
     Writable,
+    UintFunctionType,
+    Wrapper,
     First = 100u,
 };
 
 class Module {
 public:
-    Module() {
+    explicit Module(bool memoryFixtures = true) {
         words = {spv::MagicNumber, 0x00010300u, 0u, 1000u, 0u};
         emit(spv::OpCapability, {spv::CapabilityShader});
         emit(spv::OpMemoryModel, {spv::AddressingModelLogical, spv::MemoryModelGLSL450});
@@ -54,6 +56,7 @@ public:
         emit(spv::OpConstant, {Uint, Three, 3u});
         emit(spv::OpConstant, {Uint, Semantics, 264u});
         emit(spv::OpConstantTrue, {Bool, True});
+        if (!memoryFixtures) return;
         emit(spv::OpTypePointer, {WorkgroupPointer, spv::StorageClassWorkgroup, Uint});
         emit(spv::OpTypeArray, {WorkgroupArrayType, Uint, Three});
         emit(spv::OpTypePointer, {WorkgroupArrayPointer, spv::StorageClassWorkgroup, WorkgroupArrayType});
@@ -237,6 +240,32 @@ void laneSplit(Module& module, std::uint32_t merge) {
     module.emit(spv::OpLabel, {First + 3u});
 }
 
+Module returnedCall(bool perLane) {
+    Module module(false);
+    module.emit(spv::OpTypeFunction, {UintFunctionType, Uint});
+    module.function(Main);
+    module.emit(spv::OpLabel, {First});
+    module.emit(spv::OpFunctionCall, {Uint, First + 1u, Wrapper});
+    laneSplit(module, First + 4u);
+    module.barrier();
+    module.emit(spv::OpBranch, {First + 4u});
+    module.emit(spv::OpLabel, {First + 4u});
+    module.end();
+
+    module.emit(spv::OpFunction, {Uint, Wrapper, spv::FunctionControlMaskNone, UintFunctionType});
+    module.emit(spv::OpLabel, {First + 10u});
+    module.emit(spv::OpFunctionCall, {Uint, First + 11u, Helper});
+    module.emit(spv::OpReturnValue, {First + 11u});
+    module.emit(spv::OpFunctionEnd, {});
+
+    module.emit(spv::OpFunction, {Uint, Helper, spv::FunctionControlMaskNone, UintFunctionType});
+    module.emit(spv::OpLabel, {First + 12u});
+    if (perLane) module.lane(First + 13u);
+    module.emit(spv::OpReturnValue, {perLane ? First + 13u : Two});
+    module.emit(spv::OpFunctionEnd, {});
+    return module;
+}
+
 }
 
 int main() {
@@ -251,6 +280,8 @@ int main() {
     expect("a barrier after a per-lane continue without a selection merge", unmergedContinue(true), true);
     expect("a barrier after a uniform continue without a selection merge", unmergedContinue(false), false);
     expect("a call reaching a barrier under a constant comparison", call(false), false);
+    expect("a barrier under a per-lane value returned through a wrapper", returnedCall(true), true);
+    expect("a barrier under a constant returned through a wrapper", returnedCall(false), false);
     expect("a barrier under a phi joining a per-lane selection", joined([](Module& module) {
         laneSplit(module, First + 4u);
         module.emit(spv::OpBranch, {First + 4u});

@@ -487,6 +487,7 @@ private:
                     if (storage != module.storageClasses.end() && PrivateStorage(storage->second) && (inDivergentFlow || NonUniform(instruction[1]) || NonUniform(instruction[2]))) storedNonUniform.insert(variable);
                     continue;
                 }
+                if (op == spv::OpReturnValue && instruction.size() > 1u && NonUniform(instruction[1])) varyingFunctions.insert(function.id);
                 if (inDivergentFlow && !report && (op == spv::OpControlBarrier || (op == spv::OpFunctionCall && instruction.size() > 3u && barriers.contains(instruction[3])))) {
                     report = std::string(op == spv::OpControlBarrier ? "an OpControlBarrier" : "a call reaching an OpControlBarrier") + " in block %" + std::to_string(label) + " of function %" + std::to_string(function.id) + " sits in control flow a per-invocation value decides";
                 }
