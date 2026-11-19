@@ -5736,14 +5736,27 @@ void StorageTexture::SubtractPendingUnits(std::vector<std::pair<std::uint64_t, s
         auto& pending = Pending();
         std::lock_guard lock(pending.mutex);
         for (const auto* texture : pending.textures) {
-            for (std::uint32_t layer = 0; layer < texture->trackedLayers; ++layer) {
-                if (!texture->layerPending[layer]) continue;
-                const auto begin = texture->layerBegin(layer);
-                const auto end = begin + texture->layerBytes(layer);
-                constexpr std::uint64_t unitAlign = 65536ull;
-                const auto unitBegin = begin > std::numeric_limits<std::uint64_t>::max() - (unitAlign - 1) ? std::numeric_limits<std::uint64_t>::max() : (begin + unitAlign - 1) & ~(unitAlign - 1);
-                const auto unitEnd = end & ~(unitAlign - 1);
-                if (unitEnd > unitBegin) pendingUnits.emplace_back(unitBegin, unitEnd);
+            const auto base = texture->descriptor.baseAddress;
+            const auto end = base + texture->guestBytes;
+            const auto layerBytes = texture->trackedLayerBytes;
+            auto candidate = std::upper_bound(ranges.begin(), ranges.end(), base, [](auto address, const auto& range) { return address < range.second; });
+            std::uint32_t nextLayer = 0;
+            for (; candidate != ranges.end() && candidate->first < end; ++candidate) {
+                const auto first = static_cast<std::uint32_t>((std::max(base, candidate->first) - base) / layerBytes);
+                const auto last = static_cast<std::uint32_t>((std::min(end, candidate->second) - 1 - base) / layerBytes);
+                const auto stop = std::min(texture->trackedLayers, last + 1);
+                const auto start = std::max(nextLayer, first);
+                if (start >= stop) continue;
+                texture->layerPending.ForEachSet(start, stop - start, [&](std::size_t index) {
+                    const auto layer = static_cast<std::uint32_t>(index);
+                    const auto begin = texture->layerBegin(layer);
+                    const auto layerEnd = begin + texture->layerBytes(layer);
+                    constexpr std::uint64_t unitAlign = 65536ull;
+                    const auto unitBegin = begin > std::numeric_limits<std::uint64_t>::max() - (unitAlign - 1) ? std::numeric_limits<std::uint64_t>::max() : (begin + unitAlign - 1) & ~(unitAlign - 1);
+                    const auto unitEnd = layerEnd & ~(unitAlign - 1);
+                    if (unitEnd > unitBegin) pendingUnits.emplace_back(unitBegin, unitEnd);
+                });
+                nextLayer = stop;
             }
         }
     }

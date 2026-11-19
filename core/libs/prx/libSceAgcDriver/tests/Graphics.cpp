@@ -11340,6 +11340,10 @@ void unitFlagsTests() {
     for (std::size_t unit = 0; unit < flags.size(); ++unit) Require(flags[unit] == (unit >= 60 && unit < 70), "unit flags: unit " + std::to_string(unit) + " reads wrong");
     flags[64] = false;
     Require(!flags.AllIn(60, 10) && flags.AnyIn(60, 10) && flags.Count() == 9 && !flags[64] && flags[63] && flags[65], "unit flags: clearing one unit changed another");
+    std::vector<std::size_t> visited;
+    flags.ForEachSet(62, 6, [&](std::size_t index) { visited.push_back(index); });
+    flags.ForEachSet(60, 0, [&](std::size_t index) { visited.push_back(index); });
+    Require(visited == std::vector<std::size_t>{62, 63, 65, 66, 67}, "unit flags: iteration included an unset or out-of-range bit");
     flags.SetRange(0, 130, true);
     Require(flags.AllIn(0, 130) && flags.Count() == 130, "unit flags: setting every unit left one clear");
     flags.SetRange(64, 64, false);

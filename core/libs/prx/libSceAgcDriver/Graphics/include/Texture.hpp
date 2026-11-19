@@ -240,6 +240,15 @@ public:
     bool AnyIn(std::size_t first, std::size_t length) const {
         return eachWord(first, length, [&](std::size_t word, std::uint64_t mask) { return (words[word] & mask) != 0u; });
     }
+    template <typename Visit>
+    void ForEachSet(std::size_t first, std::size_t length, Visit&& visit) const {
+        eachWord(first, length, [&](std::size_t word, std::uint64_t mask) {
+            for (auto flags = words[word] & mask; flags != 0; flags &= flags - 1u) {
+                visit(word * WordBits + static_cast<std::size_t>(std::countr_zero(flags)));
+            }
+            return false;
+        });
+    }
     bool AllIn(std::size_t first, std::size_t length) const {
         return !eachWord(first, length, [&](std::size_t word, std::uint64_t mask) { return (words[word] & mask) != mask; });
     }

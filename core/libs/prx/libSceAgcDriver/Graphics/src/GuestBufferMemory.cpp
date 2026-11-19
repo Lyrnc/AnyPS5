@@ -6859,8 +6859,9 @@ void GuestBufferMemory::UploadFinish(bool addressable, std::optional<std::pair<s
     const auto loopStart = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     std::uint64_t refreshUs = 0;
     std::uint64_t copyUs = 0;
+    const bool addressShadows = addressable && UnitShadowEnabled();
     std::vector<std::pair<std::uint64_t, std::uint64_t>> heapRanges;
-    if (addressable && space != nullptr) {
+    if (addressShadows && space != nullptr) {
         for (const auto& region : space->base) {
             if (region.direct != nullptr && region.hostBacked && region.end > region.begin) heapRanges.emplace_back(region.begin, region.end);
         }
@@ -6959,7 +6960,7 @@ void GuestBufferMemory::UploadFinish(bool addressable, std::optional<std::pair<s
             static const bool bdaFlush = std::getenv("APS5_BDA_FLUSH") != nullptr;
             if (!(addressable && region.hostBacked) || bdaFlush) {
                 StorageTexture::FlushPending(region.begin, static_cast<std::size_t>(bytes), nullptr, "imported buffer region");
-            } else if (region.end > region.begin) {
+            } else if (addressShadows && region.end > region.begin) {
                 heapRanges.emplace_back(region.begin, region.end);
             }
             continue;
@@ -6993,6 +6994,9 @@ void GuestBufferMemory::UploadFinish(bool addressable, std::optional<std::pair<s
         if (profile) copyUs += microsecondsSince(copyStart);
     }
     if (addressable) StoreDepthExpandWrites(context);
+    std::erase_if(heapRanges, [](const auto& range) {
+        return LiveUnitsClear(range.first, static_cast<std::size_t>(range.second - range.first));
+    });
     if (!heapRanges.empty()) {
         std::sort(heapRanges.begin(), heapRanges.end());
         std::size_t merged = 0;
