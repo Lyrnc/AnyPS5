@@ -433,6 +433,12 @@ void HostImageReuse() {
         auto context = budgetContext();
         reportedBudget = 100 * MiB;
         reportedUsage = 200 * MiB;
+        reportedSecondBudget = 36 * MiB;
+        reportedSecondUsage = 178 * MiB;
+        context.memory.memoryHeapCount = 3;
+        context.memory.memoryHeaps[2] = {214 * MiB, VK_MEMORY_HEAP_DEVICE_LOCAL_BIT};
+        context.memory.memoryTypeCount = 3;
+        context.memory.memoryTypes[2] = {HostVisible | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 2};
         VkMemoryAllocateInfo host{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
         host.allocationSize = 8 * MiB;
         host.memoryTypeIndex = 1;
@@ -444,6 +450,12 @@ void HostImageReuse() {
         const auto deviceMemory = AllocateImageMemory(context, device, 3, "vkAllocateMemory storage texture");
         ReleaseImageMemory(context, deviceMemory, device.allocationSize, 0);
         Expect(mock.memoryBytes.contains(first), "a release while the device-local heap was over its budget flushed the host-type image memory");
+        auto bar = host;
+        bar.memoryTypeIndex = 2;
+        const auto barMemory = AllocateImageMemory(context, bar, 1u << 2u, "vkAllocateMemory storage texture");
+        Expect(mock.memoryTypes.at(barMemory) == 2, "the image did not use the host-visible device-local heap");
+        ReleaseImageMemory(context, barMemory, bar.allocationSize, 2);
+        Expect(!mock.memoryBytes.contains(barMemory), "the host image pool retained memory from the over-budget host-visible device-local heap");
         const auto attempts = mock.attempts;
         const auto again = AllocateImageMemory(context, host, 3, "vkAllocateMemory storage texture");
         Expect(again == first && mock.attempts == attempts, "host-type image memory of the same size and type was allocated again instead of reused");
@@ -454,6 +466,8 @@ void HostImageReuse() {
         ReleaseImageMemory(context, again, 8 * MiB, 1);
         reportedBudget = 0;
         reportedUsage = 0;
+        reportedSecondBudget = 0;
+        reportedSecondUsage = 0;
     }
     Expect(mock.liveBytes == 0, "host-type image memory the pool kept leaked when the pool was destroyed");
 }
