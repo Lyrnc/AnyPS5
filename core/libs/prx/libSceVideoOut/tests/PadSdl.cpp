@@ -209,6 +209,8 @@ void ControllerRemapping(PadInput& padInput, DisplayWindow& window, int device, 
     constexpr std::uint32_t Cross = 0x4000;
     constexpr std::uint32_t Circle = 0x2000;
     constexpr std::uint32_t Square = 0x8000;
+    constexpr std::uint32_t L1 = static_cast<std::uint32_t>(Pad::PadButton::L1);
+    constexpr std::uint32_t L2 = static_cast<std::uint32_t>(Pad::PadButton::L2);
     constexpr std::uint32_t R2 = 0x0200;
     constexpr std::uint32_t TouchPad = 0x100000;
     Pad::Initialize();
@@ -228,7 +230,7 @@ void ControllerRemapping(PadInput& padInput, DisplayWindow& window, int device, 
         keyboard(SDL_KEYDOWN, SDL_SCANCODE_F1);
         keyboard(SDL_KEYUP, SDL_SCANCODE_F1);
     };
-    const auto writeConfig = [&](const char* contents) {
+    const auto writeConfig = [&](const std::string& contents) {
         std::ofstream config(configPath, std::ios::trunc);
         config << contents;
         Require(config.good());
@@ -287,6 +289,62 @@ void ControllerRemapping(PadInput& padInput, DisplayWindow& window, int device, 
     padInput.HandleEvent(event, window);
     Require(Pad::ReadState(0).buttons == Cross);
     button(SDL_CONTROLLER_BUTTON_A, false);
+
+    SDL_FlushEvents(SDL_CONTROLLERAXISMOTION, SDL_CONTROLLERBUTTONUP);
+    const auto pumpControllerEvents = [&] {
+        SDL_GameControllerUpdate();
+        SDL_Event controllerEvent{};
+        while (SDL_PollEvent(&controllerEvent)) padInput.HandleEvent(controllerEvent, window);
+    };
+    for (const auto axis : {SDL_CONTROLLER_AXIS_TRIGGERLEFT, SDL_CONTROLLER_AXIS_TRIGGERRIGHT}) {
+        const bool left = axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT;
+        const auto triggerBit = left ? L2 : R2;
+        const std::string chord = std::string("ReloadInputMapping = KEY:F1\nReloadInputMapping = PAD:L1+") + (left ? "L2\n" : "R2\n");
+        const auto trigger = [&](Sint16 pressure) {
+            Require(SDL_JoystickSetVirtualAxis(joystick, axis, pressure) == 0);
+            pumpControllerEvents();
+        };
+
+        writeConfig(chord);
+        reload();
+        button(SDL_CONTROLLER_BUTTON_A, true);
+        button(SDL_CONTROLLER_BUTTON_LEFTSHOULDER, true);
+        pumpControllerEvents();
+        Require(Pad::ReadState(0).buttons == (Cross | L1));
+
+        writeConfig(chord + "SDLButton:a = Circle\n");
+        trigger(SDL_JOYSTICK_AXIS_MAX / 2);
+        Require(Pad::ReadState(0).buttons == (Circle | L1 | triggerBit));
+
+        writeConfig(chord + "SDLButton:a = Square\n");
+        trigger(SDL_JOYSTICK_AXIS_MAX);
+        Require(Pad::ReadState(0).buttons == (Circle | L1 | triggerBit));
+        trigger(SDL_JOYSTICK_AXIS_MIN);
+        Require(Pad::ReadState(0).buttons == (Circle | L1));
+        trigger(SDL_JOYSTICK_AXIS_MAX);
+        Require(Pad::ReadState(0).buttons == (Square | L1 | triggerBit));
+
+        trigger(SDL_JOYSTICK_AXIS_MIN);
+        button(SDL_CONTROLLER_BUTTON_A, false);
+        pumpControllerEvents();
+        writeConfig(chord + "SDLButton:a = Circle\n");
+        ImeSetHostPadSink_nid_no_patch(&Forward);
+        const auto forwardedBefore = forwarded.size();
+        trigger(SDL_JOYSTICK_AXIS_MAX / 2);
+        Require(forwarded.size() > forwardedBefore && (forwarded.back().buttons & triggerBit) != 0);
+        ImeSetHostPadSink_nid_no_patch(nullptr);
+        padInput.Update(window);
+        trigger(SDL_JOYSTICK_AXIS_MAX);
+        button(SDL_CONTROLLER_BUTTON_A, true);
+        Require((Pad::ReadState(0).buttons & (Square | Circle)) == Square);
+
+        trigger(SDL_JOYSTICK_AXIS_MIN);
+        button(SDL_CONTROLLER_BUTTON_A, false);
+        button(SDL_CONTROLLER_BUTTON_LEFTSHOULDER, false);
+        pumpControllerEvents();
+    }
+    writeConfig("");
+    reload();
 }
 
 }

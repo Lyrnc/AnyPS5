@@ -525,16 +525,18 @@ void PadInput::HandleEvent(const SDL_Event& event, DisplayWindow& window) {
         }
         return;
     }
-    if (event.type == SDL_CONTROLLERBUTTONDOWN || event.type == SDL_CONTROLLERBUTTONUP ||
-        event.type == SDL_CONTROLLERAXISMOTION || event.type == SDL_CONTROLLERDEVICEREMAPPED) {
-        SDL_JoystickID which = -1;
-        if (event.type == SDL_CONTROLLERBUTTONDOWN || event.type == SDL_CONTROLLERBUTTONUP) which = event.cbutton.which;
-        else if (event.type == SDL_CONTROLLERAXISMOTION) which = event.caxis.which;
-        else if (event.type == SDL_CONTROLLERDEVICEREMAPPED) which = event.cdevice.which;
+    const bool controllerButton = event.type == SDL_CONTROLLERBUTTONDOWN || event.type == SDL_CONTROLLERBUTTONUP;
+    const bool controllerAxis = event.type == SDL_CONTROLLERAXISMOTION;
+    if (controllerButton || controllerAxis || event.type == SDL_CONTROLLERDEVICEREMAPPED) {
+        SDL_JoystickID which;
+        if (controllerButton) which = event.cbutton.which;
+        else if (controllerAxis) which = event.caxis.which;
+        else which = event.cdevice.which;
+        const bool triggerAxis = controllerAxis && (event.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT || event.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT);
         for (int slot = 0; slot < PAD_MAX_CONTROLLERS; ++slot) {
             if (slots[slot].controller != nullptr && slots[slot].instanceId == which) {
                 slots[slot].state = sampleController(slot);
-                if (slot == 0 && (event.type == SDL_CONTROLLERBUTTONDOWN || event.type == SDL_CONTROLLERBUTTONUP)) dispatchPadChords(window);
+                if (slot == 0 && (controllerButton || triggerAxis)) dispatchPadChords(window);
                 publish(window.FrameNumber(), slot);
                 return;
             }
@@ -573,8 +575,8 @@ void PadInput::HandleEvent(const SDL_Event& event, DisplayWindow& window) {
 }
 
 void PadInput::dispatchPadChords(DisplayWindow& window) {
-    if (ImeCapturesPad_nid_postfix() || ModalDialogCapturesInput_nid_postfix()) return;
     const auto requests = keyboardMouse.PadChordRequests(slots[0].state.buttons);
+    if (ImeCapturesPad_nid_postfix() || ModalDialogCapturesInput_nid_postfix()) return;
     const bool focused = window.Handle() != nullptr && SDL_GetKeyboardFocus() == window.Handle();
     applyRequests(requests, focused, window);
 }
