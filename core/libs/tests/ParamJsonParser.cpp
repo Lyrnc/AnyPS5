@@ -190,6 +190,16 @@ static void CheckNumberSyntax(const std::filesystem::path& path) {
 static void CheckUtf8(const std::filesystem::path& path) {
     const std::string prefix = R"({"titleId":"PPSA00000","localizedParameters":{"en-US":{"titleName":")";
     const std::string suffix = R"("}}})";
+    const std::string bom = "\xEF\xBB\xBF";
+    const std::string titleWithMarker = bom + "Example";
+    const std::string document = prefix + titleWithMarker + suffix;
+    const auto marked = ParseText(path, bom + "\r\n" + document);
+    Require(marked.titleId == "PPSA00000" && marked.title == titleWithMarker, "UTF-8 BOM changed the parsed metadata");
+    for (const auto& invalid : {bom + bom + document, " " + bom + document, bom}) {
+        bool rejected = false;
+        try { ParseText(path, invalid); } catch (const std::runtime_error&) { rejected = true; }
+        Require(rejected, "Accepted a repeated or misplaced UTF-8 BOM, or a BOM without JSON");
+    }
     for (const auto& title : {std::string("ASCII"), std::string("\xC2\x80"), std::string("\xE3\x82\xB2\xE3\x83\xBC\xE3\x83\xA0"),
                               std::string("\xF0\x9F\x8E\xAE"), std::string("\xF4\x8F\xBF\xBF")}) {
         Require(ParseText(path, prefix + title + suffix).title == title, "Valid UTF-8 title changed");

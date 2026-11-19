@@ -35,7 +35,8 @@ int main(int argc, char** argv) {
     std::filesystem::create_directories("app0/sce_sys");
     {
         std::ofstream param("app0/sce_sys/param.json", std::ios::binary);
-        param << R"({"titleId":"PPSA00000","localizedParameters":{"en-US":{"titleName":"Example"}},"downloadDataSize":)" << quotaMiB << '}';
+        param << "\xEF\xBB\xBF"
+                 R"({"titleId":"PPSA00000","localizedParameters":{"en-US":{"titleName":"Example"}},"downloadDataSize":)" << quotaMiB << '}';
         Require(static_cast<bool>(param), "could not write metadata");
     }
     AppContentInitParam init{};

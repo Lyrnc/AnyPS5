@@ -9,6 +9,7 @@
 #include <locale>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -272,7 +273,8 @@ JsonValue parseJsonValue(const std::string& text, std::size_t& position, std::si
 }
 
 JsonValue parseJsonDocument(const std::string& text) {
-    std::size_t position = 0;
+    constexpr std::string_view Utf8Bom = "\xEF\xBB\xBF";
+    std::size_t position = text.starts_with(Utf8Bom) ? Utf8Bom.size() : 0;
     JsonValue root = parseJsonValue(text, position, 0);
     skipWhitespace(text, position);
     if (position != text.size()) throw std::runtime_error("unexpected trailing data in param.json");
