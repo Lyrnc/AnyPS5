@@ -67,6 +67,24 @@ class RedactTests(unittest.TestCase):
         text = "frames=120 averageFps=59.9 version 1.2.3"
         self.assertEqual(bug_report.redact(text, home="/home/ana", user="ana", host="box"), "frames=120 averageFps=59.9 version 1.2.3")
 
+    def test_ipv6_replaces_the_whole_address_and_keeps_surrounding_punctuation(self):
+        cases = (
+            ("remote 2001:DB8::12.", "remote <ip>."),
+            ("remote [2001:db8:0:1:2:3:4:5]:443", "remote [<ip>]:443"),
+            ("listen=[::]:80, peer=::1", "listen=[<ip>]:80, peer=<ip>"),
+            ("mapped (::ffff:192.0.2.7)", "mapped (<ip>)"),
+            ("interface=fe80::42%eth0.5, prefix=2001:db8::/32", "interface=<ip>, prefix=<ip>/32"),
+            ("https://[fe80::42%25eth0]:443/", "https://[<ip>]:443/"),
+        )
+        for text, expected in cases:
+            with self.subTest(text=text):
+                self.assertEqual(bug_report.redact(text, home="", user="", host=""), expected)
+
+    def test_ipv6_redaction_preserves_non_addresses_and_other_redaction(self):
+        text = "00:11:22:33:44:55 12:34:56 std::dead 2001:::abcd 2001:db8::dead%ip dead ip 192.0.2.7"
+        expected = "00:11:22:33:44:55 12:34:56 std::<host> 2001:::abcd <ip> <host> <user> <ip>"
+        self.assertEqual(bug_report.redact(text, home="", user="ip", host="dead"), expected)
+
 
 class BundleTests(unittest.TestCase):
     identity = {"home": "/home/ana", "user": "ana", "host": "serverfestivo"}
@@ -148,6 +166,16 @@ class BundleTests(unittest.TestCase):
         out, _ = self.bundle()
         with zipfile.ZipFile(out) as bundle:
             self.assertEqual(json.loads(bundle.read("anyps5-report.json")), {"path": "~/title.elf"})
+
+    def test_ipv6_is_redacted_in_the_report_log_and_input_config(self):
+        self.report.write_text(json.dumps({"peer": [{"2001:db8::a": "[2001:db8::b]:443"}]}), encoding="utf-8")
+        self.log.write_text("connected to fe80::42%eth0\n", encoding="utf-8")
+        self.ini.write_text("# peer ::ffff:192.0.2.7\nCross = KEY:F\n", encoding="utf-8")
+        out, _ = self.bundle()
+        with zipfile.ZipFile(out) as bundle:
+            self.assertEqual(json.loads(bundle.read("anyps5-report.json")), {"peer": [{"<ip>": "[<ip>]:443"}]})
+            self.assertEqual(bundle.read("anyps5.log").decode("utf-8"), "connected to <ip>\n")
+            self.assertEqual(bundle.read("anyps5-input.ini").decode("utf-8"), "# peer <ip>\nCross = KEY:F\n")
 
     def test_missing_log_and_input_are_left_out(self):
         _, names = self.bundle(log=self.root / "absent.log", input_config=None)

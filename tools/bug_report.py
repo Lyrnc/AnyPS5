@@ -1,5 +1,6 @@
 import argparse
 import getpass
+from ipaddress import IPv6Address
 import json
 import os
 import platform
@@ -11,6 +12,18 @@ import zipfile
 
 
 IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+IPV6 = re.compile(
+    r"(?<![\w:.])(?:[0-9A-Fa-f]{0,4}:){2}(?:[0-9A-Fa-f:.]*[0-9A-Fa-f:])?"
+    r"(?:%[\w-]+(?:\.[\w-]+)*)?(?![\w:%]|\.\w)"
+)
+
+
+def _redact_names_and_ipv4(text, user, host):
+    if user and len(user) >= 2:
+        text = re.sub(r"(?<![\w-])" + re.escape(user) + r"(?![\w-])", "<user>", text)
+    if host and len(host) >= 2:
+        text = re.sub(r"(?<![\w-])" + re.escape(host) + r"(?![\w-])", "<host>", text)
+    return IPV4.sub("<ip>", text)
 
 
 def redact(text, *, home, user, host):
@@ -21,11 +34,17 @@ def redact(text, *, home, user, host):
             text = re.sub(pattern + r"(?![\w-]|\.+[\w-])", "~", text, flags=re.IGNORECASE)
         elif home.rstrip("/"):
             text = re.sub(re.escape(home.rstrip("/")) + r"(?![\w-]|\.+[\w-])", "~", text)
-    if user and len(user) >= 2:
-        text = re.sub(r"(?<![\w-])" + re.escape(user) + r"(?![\w-])", "<user>", text)
-    if host and len(host) >= 2:
-        text = re.sub(r"(?<![\w-])" + re.escape(host) + r"(?![\w-])", "<host>", text)
-    return IPV4.sub("<ip>", text)
+    parts = []
+    start = 0
+    for match in IPV6.finditer(text):
+        try:
+            IPv6Address(match[0])
+        except ValueError:
+            continue
+        parts.extend((_redact_names_and_ipv4(text[start:match.start()], user, host), "<ip>"))
+        start = match.end()
+    parts.append(_redact_names_and_ipv4(text[start:], user, host))
+    return "".join(parts)
 
 
 def redact_report(value, identity):
@@ -53,8 +72,8 @@ host.txt            operating system, machine and Python version
 README.txt          this file
 
 Redacted: the home directory (as ~), the user and host names (as <user> and <host>),
-and IPv4 addresses (as <ip>). Nothing else is changed. Check the files before you
-attach the bundle to a public report.
+and IPv4 and IPv6 addresses (as <ip>). Check the files before attaching the bundle
+to a public report.
 """
 
 
