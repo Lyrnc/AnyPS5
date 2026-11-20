@@ -147,6 +147,14 @@ class TimelineTests(unittest.TestCase):
         self.assertAlmostEqual(first["w"], 500.0)
         self.assertEqual(tiny["w"], 1.0)
 
+    def test_tiny_slice_at_window_end_stays_visible_inside_svg(self):
+        items = [complete(1, "End of window", 999999, 1)]
+        laid = trace_timeline.layout(trace_timeline_slices(items), 0, 1000000, 100)
+        bar = laid["bars"][0]
+        self.assertEqual(bar["w"], 1.0)
+        self.assertEqual(bar["x"] + bar["w"], laid["width"])
+        self.assertIn('x="219.00"', trace_timeline.svg(laid))
+
     def test_layout_orders_rows_by_thread_name(self):
         laid = trace_timeline.layout(trace_timeline_slices(self.items), 0, 10000, 1000)
         self.assertEqual(laid["threads"], ["presenter", "queue worker"])
