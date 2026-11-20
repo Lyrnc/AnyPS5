@@ -3,11 +3,13 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <charconv>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -86,6 +88,7 @@ public:
             scriptEnd = std::max(scriptEnd, endUs);
             script.push_back({std::move(entry), startUs, endUs, -1});
         }
+        scriptButtons = BuildButtonSpans(script);
     }
 
     void SetLoopMs(std::uint64_t value) { loopUs = value * 1000; }
@@ -115,15 +118,14 @@ public:
 
     bool Started() const { return started; }
 
-    Frame Sample(std::uint64_t now, Report* report = nullptr) {
+    Frame Sample(std::uint64_t now, Report* report = nullptr, std::optional<std::uint64_t> keepHistoryFrom = std::nullopt) {
         Frame frame;
         if (!started) return frame;
-        if (!livePath.empty()) pollLive(now, report);
+        if (!livePath.empty()) pollLive(now, report, keepHistoryFrom);
         const std::uint64_t elapsed = now >= origin ? now - origin : 0;
         std::uint64_t cycle = 0;
         std::uint64_t position = elapsed;
-        if (loopUs != 0 && scriptEnd != 0) {
-            const std::uint64_t length = scriptEnd + loopUs;
+        if (const auto length = LoopLength(); length != 0) {
             cycle = elapsed / length;
             position = elapsed % length;
         }
@@ -132,6 +134,18 @@ public:
         if ((frame.buttons & 0x100) != 0) frame.analogL2 = 255;
         if ((frame.buttons & 0x200) != 0) frame.analogR2 = 255;
         return frame;
+    }
+
+    std::uint32_t HeldThrough(std::uint64_t since, std::uint64_t now, std::uint32_t buttons) const {
+        if (!started || since < origin || now < since) return 0;
+        const auto from = since - origin;
+        const auto to = now - origin;
+        std::uint32_t held = 0;
+        for (auto remaining = buttons; remaining != 0; remaining &= remaining - 1) {
+            const auto bit = std::countr_zero(remaining);
+            if (ButtonHeldThrough(bit, from, to)) held |= std::uint32_t{1} << bit;
+        }
+        return held;
     }
 
     static std::string Describe(std::uint32_t buttons) {
@@ -151,6 +165,59 @@ private:
         std::uint64_t endUs = 0;
         std::int64_t firedCycle = -1;
     };
+
+    struct ButtonSpan {
+        std::uint64_t start;
+        std::uint64_t end;
+    };
+
+    using ButtonSpans = std::array<std::vector<ButtonSpan>, 32>;
+
+    static ButtonSpans BuildButtonSpans(const std::vector<Scheduled>& events) {
+        ButtonSpans result;
+        for (const auto& event : events) {
+            for (auto buttons = event.entry.buttons; buttons != 0; buttons &= buttons - 1) {
+                result[std::countr_zero(buttons)].push_back({event.startUs, event.endUs});
+            }
+        }
+        for (auto& spans : result) {
+            std::ranges::sort(spans, {}, &ButtonSpan::start);
+            std::size_t merged = 0;
+            for (const auto span : spans) {
+                if (merged != 0 && span.start <= spans[merged - 1].end) {
+                    spans[merged - 1].end = std::max(spans[merged - 1].end, span.end);
+                } else {
+                    spans[merged++] = span;
+                }
+            }
+            spans.resize(merged);
+        }
+        return result;
+    }
+
+    std::uint64_t LoopLength() const { return loopUs != 0 && scriptEnd != 0 ? scriptEnd + loopUs : 0; }
+
+    std::uint64_t ScriptedHoldRemaining(int bit, std::uint64_t elapsed) const {
+        const auto length = LoopLength();
+        const auto position = length != 0 ? elapsed % length : elapsed;
+        const auto& spans = scriptButtons[bit];
+        const auto next = std::ranges::upper_bound(spans, position, {}, &ButtonSpan::start);
+        if (next == spans.begin()) return 0;
+        const auto end = std::prev(next)->end;
+        return end > position ? end - position : 0;
+    }
+
+    bool ButtonHeldThrough(int bit, std::uint64_t from, std::uint64_t to) const {
+        auto covered = from;
+        for (const auto& span : liveButtons[bit]) {
+            if (span.start > to) break;
+            if (span.end <= covered) continue;
+            if (span.start > covered && span.start - covered > ScriptedHoldRemaining(bit, covered)) return false;
+            covered = span.end;
+            if (covered > to) return true;
+        }
+        return ScriptedHoldRemaining(bit, covered) > to - covered;
+    }
 
     using NameTable = std::array<std::pair<std::string_view, std::uint32_t>, 16>;
 
@@ -283,7 +350,7 @@ private:
         }
     }
 
-    void pollLive(std::uint64_t now, Report* report) {
+    void pollLive(std::uint64_t now, Report* report, std::optional<std::uint64_t> keepHistoryFrom) {
         if (now < nextLivePoll) return;
         nextLivePoll = now + kLivePollUs;
         std::error_code error;
@@ -316,7 +383,12 @@ private:
         liveOffset += text.size();
         std::size_t position = 0;
         const std::uint64_t elapsed = now >= origin ? now - origin : 0;
-        std::erase_if(live, [&](const Scheduled& event) { return event.endUs + 1000000 < elapsed; });
+        auto expireBefore = elapsed > 1000000 ? elapsed - 1000000 : 0;
+        if (keepHistoryFrom) {
+            const auto historyStart = *keepHistoryFrom > origin ? *keepHistoryFrom - origin : 0;
+            expireBefore = std::min(expireBefore, historyStart);
+        }
+        std::erase_if(live, [&](const Scheduled& event) { return event.endUs < expireBefore; });
         while (position < text.size()) {
             const auto end = text.find('\n', position);
             ++liveLine;
@@ -336,10 +408,13 @@ private:
             }
             position = end + 1;
         }
+        liveButtons = BuildButtonSpans(live);
     }
 
     std::vector<Scheduled> script;
     std::vector<Scheduled> live;
+    ButtonSpans scriptButtons;
+    ButtonSpans liveButtons;
     std::uint64_t scriptEnd = 0;
     std::uint64_t loopUs = 0;
     bool started = false;

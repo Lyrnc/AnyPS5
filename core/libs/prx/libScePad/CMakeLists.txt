@@ -26,8 +26,10 @@ if(BUILD_TESTING)
     target_link_libraries(guest_pad_tests PRIVATE libScePad libc)
     configure_windows_unwind(guest_pad_tests)
     add_test(NAME guest_pad COMMAND guest_pad_tests)
+    add_test(NAME guest_pad_script_capture COMMAND guest_pad_tests script-capture)
+    set_tests_properties(guest_pad_script_capture PROPERTIES TIMEOUT 20)
     if(WIN32)
-        set_tests_properties(guest_pad PROPERTIES ENVIRONMENT_MODIFICATION
+        set_tests_properties(guest_pad guest_pad_script_capture PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:libScePad>")
     endif()
 endif()

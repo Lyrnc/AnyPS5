@@ -1707,7 +1707,50 @@ static void CheckSecondPortConnection(int user) {
     Require(scePadClose_nid_postfix(second) == PAD_OK);
 }
 
-int main() {
+static void CheckScriptCaptureHandoff() {
+    const auto path = std::filesystem::temp_directory_path() /
+        ("anyps5-pad-capture-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup() { std::error_code error; std::filesystem::remove(path, error); }
+    } cleanup{path};
+    std::ofstream(path) << "0 cross+l2 600\n800 cross+l2 5000\n";
+#ifdef _WIN32
+    Require(_wputenv_s(L"APS5_PAD_SCRIPT", path.c_str()) == 0);
+#else
+    Require(setenv("APS5_PAD_SCRIPT", path.string().c_str(), 1) == 0);
+#endif
+    Require(scePadInit_nid_postfix() == PAD_OK);
+    const int handle = scePadOpen_nid_postfix(0x10000000, PAD_PORT_TYPE_STANDARD, 0, nullptr);
+    Require(handle > 0);
+    constexpr std::uint32_t buttons = 0x4100u;
+    PadInputState captured;
+    captured.intercepted = true;
+    PadPublishInput_nid_postfix(captured);
+    PadData sample{};
+    Require(scePadReadState(handle, &sample) == PAD_OK && sample.buttons == 0x80000000u);
+    PadInputState dialogInput;
+    PadApplyInjectedInput_nid_postfix(&dialogInput);
+    Require(dialogInput.buttons == buttons);
+
+    PadPublishInput_nid_postfix(PadInputState{});
+    Require(scePadReadState(handle, &sample) == PAD_OK);
+    if (sample.buttons != 0) std::fprintf(stderr, "Scripted buttons %#x reached the title after dialog capture\n", sample.buttons);
+    Require(sample.buttons == 0 && sample.analog_buttons_l2 == 0);
+    PadData queued[2]{};
+    Require(scePadRead_nid_postfix(handle, queued, 2) == 2);
+    Require(queued[0].buttons == 0x80000000u && queued[1].buttons == 0 && queued[1].analog_buttons_l2 == 0);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(850));
+    Require(scePadReadState(handle, &sample) == PAD_OK && sample.buttons == buttons && sample.analog_buttons_l2 == 255);
+    Require(scePadClose_nid_postfix(handle) == PAD_OK);
+}
+
+int main(int argc, char** argv) {
+    if (argc == 2 && std::strcmp(argv[1], "script-capture") == 0) {
+        CheckScriptCaptureHandoff();
+        return 0;
+    }
     CheckConcurrentSpecialOpens();
     CheckInputCommands();
     std::uint32_t accessibilityState = 7;

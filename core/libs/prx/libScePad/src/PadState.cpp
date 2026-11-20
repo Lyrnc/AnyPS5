@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <deque>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <cstdio>
 #include <memory>
@@ -367,7 +368,8 @@ Pad::InputCommandFile::Input InjectedInput(std::uint64_t now, bool titleRead = f
     if (auto* script = Script()) {
         if (titleRead) script->Start(now);
         Pad::InputScript::Report report;
-        const auto frame = script->Sample(now, &report);
+        const auto history = injectedHeldThroughCapture != 0 ? std::optional{injectedHeldAt} : std::nullopt;
+        const auto frame = script->Sample(now, &report, history);
         for (const auto& fired : report.fired) {
             std::fprintf(stderr, "[pad-script] t=%llu %s hold %llu\n", static_cast<unsigned long long>(fired.elapsedMs), fired.label.c_str(), static_cast<unsigned long long>(fired.holdMs));
         }
@@ -390,8 +392,15 @@ Pad::InputCommandFile::Input InjectedInput(std::uint64_t now, bool titleRead = f
 
 Pad::InputCommandFile::Input InjectedTitleInput(std::uint64_t now) {
     auto injected = InjectedInput(now, true);
-    if (slots[0].state.intercepted) injectedHeldThroughCapture |= injected.buttons;
-    else injectedHeldThroughCapture &= InjectedCommands().HeldThrough(injectedHeldAt, now);
+    if (slots[0].state.intercepted) {
+        injectedHeldThroughCapture = injected.buttons;
+    } else if (injectedHeldThroughCapture != 0) {
+        auto held = InjectedCommands().HeldThrough(injectedHeldAt, now);
+        if (const auto* script = Script()) {
+            held |= script->HeldThrough(injectedHeldAt, now, injectedHeldThroughCapture & injected.buttons);
+        }
+        injectedHeldThroughCapture &= held;
+    }
     injectedHeldAt = now;
     injected.buttons &= ~injectedHeldThroughCapture;
     return injected;
@@ -720,9 +729,10 @@ extern "C" void PadPublishInput_nid_postfix(const PadInputState& input) {
 extern "C" void PadApplyInjectedInput_nid_postfix(PadInputState* state) {
     if (state == nullptr) return;
     std::lock_guard lock(stateMutex);
-    const auto injected = InjectedInput(sceKernelGetProcessTime());
-    injectedHeldThroughCapture |= injected.buttons;
-    injectedHeldAt = sceKernelGetProcessTime();
+    const auto now = sceKernelGetProcessTime();
+    const auto injected = InjectedInput(now);
+    injectedHeldThroughCapture = injected.buttons;
+    injectedHeldAt = now;
     state->buttons |= injected.buttons;
     InjectSticks(state->sticks, injected);
 }

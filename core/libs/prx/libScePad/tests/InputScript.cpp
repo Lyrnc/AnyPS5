@@ -70,6 +70,15 @@ int main() {
         Check(frame.stickMask == 2, "only the right stick is marked as scripted");
         Check(!script.Sample(5500000).hasSticks, "stick released");
 
+        Pad::InputScript continuous;
+        continuous.SetScript(Pad::InputScript::ParseText("140 cross 60\n40 cross+l2 100\n0 cross 80\n220 cross 50\n"));
+        continuous.Start(1000000);
+        Check(continuous.HeldThrough(999999, 1040000, Cross) == 0, "nothing was held before the script started");
+        Check(continuous.HeldThrough(1000000, 1199999, Cross | L2) == Cross, "overlapping and adjacent presses stay held");
+        Check(continuous.HeldThrough(1040000, 1139999, Cross | L2) == (Cross | L2), "continuity checked independently per button");
+        Check(continuous.HeldThrough(1040000, 1140000, Cross | L2) == Cross, "the release boundary is exclusive");
+        Check(continuous.HeldThrough(1190000, 1230000, Cross) == 0, "a fresh press follows an unobserved release");
+
         Pad::InputScript looping;
         looping.SetScript(Pad::InputScript::ParseText("0 cross 100\n"));
         looping.SetLoopMs(900);
@@ -79,6 +88,8 @@ int main() {
         Check(looping.Sample(500000).buttons == 0, "loop idle");
         Pad::InputScript::Report second;
         Check(looping.Sample(1010000, &second).buttons == Cross && second.fired.size() == 1, "loop second cycle");
+        Check(looping.HeldThrough(50000, 1010000, Cross) == 0, "a loop gap releases the button");
+        Check(looping.HeldThrough(1000000, 1010000, Cross) == Cross, "second-cycle presses can remain held");
 
         const auto path = std::filesystem::temp_directory_path() /
             ("anyps5-pad-script-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -108,6 +119,27 @@ int main() {
         Pad::InputScript::Report laterReport;
         static_cast<void>(live.Sample(4000000, &laterReport));
         Check(laterReport.errors.size() == 1 && laterReport.errors[0].find("line 5:") != std::string::npos, "a later live error keeps counting lines");
+        std::filesystem::remove(path);
+
+        Pad::InputScript bridged;
+        bridged.SetScript(Pad::InputScript::ParseText("0 cross 100\n"));
+        bridged.SetLoopMs(50);
+        bridged.SetLive(path);
+        bridged.Start(1000000);
+        append("0 cross 100\n");
+        Check(bridged.Sample(1080000).buttons == Cross, "live event scheduled before a loop gap");
+        Check(bridged.HeldThrough(1020000, 1230000, Cross) == Cross, "a live event bridges a script loop gap");
+        Check(bridged.HeldThrough(1020000, 1250000, Cross) == 0, "continuity ends at the next unbridged gap");
+        std::filesystem::remove(path);
+
+        Pad::InputScript history;
+        history.SetLive(path);
+        history.Start(1000000);
+        append("0 cross 300\n250 cross 3000\n");
+        Check(history.Sample(1000000).buttons == Cross, "initial live press begins");
+        append("0 circle 200\n");
+        Check(history.Sample(3000000, nullptr, 1000000).buttons == (Cross | Circle), "live commands are still polled while keeping history");
+        Check(history.HeldThrough(1000000, 3000000, Cross | Circle) == Cross, "live polling keeps the older part of a continuous hold");
         std::filesystem::remove(path);
 
         Pad::InputScript capped;
