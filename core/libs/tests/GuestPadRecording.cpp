@@ -61,7 +61,8 @@ int main() {
     std::filesystem::create_directories(directory);
     const auto replay = directory / "replay.aps5pad";
     const auto record = directory / "record.aps5pad";
-    std::ofstream(replay, std::ios::binary) << "APS5_PAD_RECORDING 1\n0 4000 255 0 128 128 0 200\n150 0 128 128 128 128 0 0\n";
+    const std::string original = "APS5_PAD_RECORDING 1\n0 4000 255 0 128 128 0 200\n150 0 128 128 128 128 0 0\n";
+    std::ofstream(replay, std::ios::binary) << original;
 
     Require(scePadInit_nid_postfix() == PAD_OK, "scePadInit failed");
     const int handle = scePadOpen_nid_postfix(0x10000000, 0, 0, nullptr);
@@ -75,6 +76,18 @@ int main() {
     SetPath("APS5_PAD_REPLAY", directory / "missing.aps5pad");
     Require(ReadRefused(), "a missing APS5_PAD_REPLAY file did not stop the controller read");
     SetPath("APS5_PAD_REPLAY", replay);
+    SetPath("APS5_PAD_RECORD", directory / "." / replay.filename());
+    Require(ReadRefused(), "recording back into the replay file was accepted");
+    const auto alias = directory / "alias.aps5pad";
+    std::error_code linkError;
+    std::filesystem::create_hard_link(replay, alias, linkError);
+    if (!linkError) {
+        SetPath("APS5_PAD_RECORD", alias);
+        Require(ReadRefused(), "recording through a hard link to the replay file was accepted");
+    }
+    std::stringstream preserved;
+    preserved << std::ifstream(replay, std::ios::binary).rdbuf();
+    Require(preserved.str() == original, "refusing a recording changed the replay source");
     SetPath("APS5_PAD_RECORD", directory / "missing-directory" / "record.aps5pad");
     Require(ReadRefused(), "an unwritable APS5_PAD_RECORD path did not stop the controller read");
     SetPath("APS5_PAD_RECORD", record);
