@@ -336,13 +336,23 @@ class ReportTests(unittest.TestCase):
             "",
             "| Title | ID | Version | Cold | Warm | FPS | First error | Before |",
             "|---|---|---|---|---|---|---|---|",
-            "| Light | PPSA85300 | 0.4 | crashed | rendering | 31.0 | what(): unsupported MIB 1.1 \\| x | rendering |",
+            "| Light | PPSA85300 | 0.4 | crashed | rendering | 31.0 | what(): unsupported MIB 1.1 &#124; x | rendering |",
             "",
         ])))
         self.assertIn("| Title | ID | Measure | Before | Now |", report)
         self.assertNotIn("Before", title_run.render_markdown(now))
         now["machine"] = {"os": "", "gpu": "", "driver": "", "cpu": "Ryzen AI 7 350"}
         self.assertTrue(title_run.render_markdown(now).startswith("AnyPS5 `abc1234`, main + #6814. CPU Ryzen AI 7 350. 2 runs"))
+
+    def test_render_markdown_keeps_title_metadata_in_its_cells(self):
+        name = "Café | Arcade\nDeluxe"
+        now = summary({"PPSA00001": {"name": name, "version": "1.0 | preview",
+                                     "runs": [run("rendering", fps=60.0)]}})
+        before = summary({"PPSA00001": {"name": name, "version": "1.0",
+                                        "runs": [run("rendering", fps=30.0)]}})
+        report = title_run.render_markdown(now, before).splitlines()
+        self.assertIn("| Café &#124; Arcade<br>Deluxe | PPSA00001 | 1.0 &#124; preview | rendering | - | 60.0 |  | rendering |", report)
+        self.assertIn("| Café &#124; Arcade<br>Deluxe | PPSA00001 | FPS | 30.0 | 60.0 |", report)
 
     def test_render_markdown_states_the_run_length_of_the_titles(self):
         for lengths, stated in (((90, 90), "90 s each."), ((30, 120, 45), "30 to 120 s each.")):

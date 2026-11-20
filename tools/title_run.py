@@ -23,6 +23,7 @@ import pad_timeline
 import unwrap_self
 from audit_dump import comparison_path
 from package_release import native_auxiliary_runtimes, windows_runtime
+from trace_digest import table_cell
 OUTCOMES = ("relink-failed", "crashed", "exited", "stalled", "frame-unreadable", "blank", "rendering")
 TITLE_ID = re.compile(r"[A-Z]{4}[0-9]{5}")
 TITLE_FIELDS = {"relink": list, "fixed_base": str, "executables": list, "seconds": int, "env": dict, "pad": dict, "files": dict, "smoke": bool}
@@ -408,7 +409,8 @@ def render_compare(compared):
                 details.append(f"{title['name']} ({title_id}), {label.lower()} {unit}: "
                                f"only before: {before}; only now: {now}; in both: {both}")
         for label, values in measures:
-            lines.append("| " + " | ".join([title["name"], title_id, label, display(values["before"]), display(values["now"])]) + " |")
+            row = [title["name"], title_id, label, display(values["before"]), display(values["now"])]
+            lines.append("| " + " | ".join(map(table_cell, row)) + " |")
     return lines + [""] + details
 
 
@@ -444,12 +446,11 @@ def render_markdown(summary, previous=None):
     for title_id, title in sorted(summary["titles"].items()):
         runs = title["runs"]
         error = next((entry["first_error"] for entry in runs if entry["outcome"] != "rendering" and entry["first_error"]), "")
-        row = [title["name"], title_id, title["version"], cell(runs, "cold"), cell(runs, "warm"), f"{runs[-1]['fps']:.1f}",
-               error[:120].replace("|", "\\|")]
+        row = [title["name"], title_id, title["version"], cell(runs, "cold"), cell(runs, "warm"), f"{runs[-1]['fps']:.1f}", error[:120]]
         if previous:
             old = previous["titles"].get(title_id)
             row.append(worst(old["runs"]) if old else "new")
-        lines.append("| " + " | ".join(row) + " |")
+        lines.append("| " + " | ".join(map(table_cell, row)) + " |")
     if previous and (compared := compare_runs(summary, previous)):
         lines += ["", *render_compare(compared)]
     return "\n".join(lines + [""])
