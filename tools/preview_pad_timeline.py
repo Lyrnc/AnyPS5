@@ -3,11 +3,18 @@ import json
 import sys
 from pathlib import Path
 
-from pad_timeline import compile_timeline, load_timeline
+from pad_input import COMMAND_FILE_BYTES
+from pad_timeline import MAX_SEQUENCE, compile_timeline, load_timeline
 
 
 def preview(document, repeat=1, gap_ms=200):
+    result, _ = _preview_with_capacity(document, repeat, gap_ms)
+    return result
+
+
+def _preview_with_capacity(document, repeat, gap_ms):
     compiled = compile_timeline(document, 1, repeat, gap_ms)
+    max_sequence_digits = COMMAND_FILE_BYTES - len(compiled) + 1
     events = []
     for line in compiled.splitlines()[1:]:
         at_ms, hold_ms, buttons, *axes = map(int, line.split())
@@ -15,8 +22,9 @@ def preview(document, repeat=1, gap_ms=200):
         if axes:
             event["left_stick"], event["right_stick"] = axes[:2], axes[2:]
         events.append(event)
-    return {"preview": True, "event_count": len(events), "duration_ms": events[-1]["at_ms"] + events[-1]["hold_ms"],
-            "events": events}
+    result = {"preview": True, "event_count": len(events), "duration_ms": events[-1]["at_ms"] + events[-1]["hold_ms"],
+              "events": events}
+    return result, max_sequence_digits
 
 
 def main(argv=None):
@@ -31,9 +39,13 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         document = load_timeline(args.timeline)
-        result = preview(document, args.repeat, args.gap_ms)
+        result, max_sequence_digits = _preview_with_capacity(document, args.repeat, args.gap_ms)
     except (OSError, ValueError, RecursionError) as error:
         parser.exit(2, f"{parser.prog}: {error}\n")
+    if max_sequence_digits < len(str(MAX_SEQUENCE)):
+        print(f"{parser.prog}: warning: timeline fits the {COMMAND_FILE_BYTES // 1024} KiB command limit "
+              f"only when the number of sequence digits is at most {max_sequence_digits}",
+              file=sys.stderr)
     if args.json:
         print(json.dumps(result, indent=2))
     else:

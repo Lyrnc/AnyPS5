@@ -42,6 +42,31 @@ class TimelinePreviewTests(unittest.TestCase):
         self.assertEqual([list(map(int, line.split())) for line in compiled.splitlines()[1:]],
                          [[event["at_ms"], event["hold_ms"], event["buttons"]] for event in result["events"]])
 
+    def test_command_size_warns_only_when_sequence_length_determines_fit(self):
+        document = {"version": 1, "events": [
+            {"at_ms": 0, "hold_ms": 1, "buttons": ["cross"], "left_stick": [255, 255], "right_stick": [255, 255]}]}
+        with tempfile.TemporaryDirectory() as directory:
+            timeline = Path(directory) / "timeline.json"
+            timeline.write_text(json.dumps(document), encoding="utf-8")
+            for repeat, status, diagnostic in (
+                (2296, 0, b""),
+                (2297, 0, b"warning: timeline fits the 64 KiB command limit only when the number of sequence digits is at most 7"),
+                (2298, 2, b"the runtime reads at most 65536"),
+            ):
+                with self.subTest(repeat=repeat):
+                    result = subprocess.run([sys.executable, preview_pad_timeline.__file__, str(timeline),
+                                             "--repeat", str(repeat), "--gap-ms", "0", "--json"],
+                                            capture_output=True, timeout=5)
+                    self.assertEqual(result.returncode, status, result.stderr)
+                    if status == 0:
+                        self.assertEqual(json.loads(result.stdout)["event_count"], repeat)
+                    else:
+                        self.assertEqual(result.stdout, b"")
+                    if diagnostic:
+                        self.assertIn(diagnostic, result.stderr)
+                    else:
+                        self.assertEqual(result.stderr, b"")
+
     def test_stick_positions_are_previewed(self):
         document = {"version": 1, "events": [{"at_ms": 0, "hold_ms": 300, "buttons": [], "left_stick": [255, 128]},
                                              {"at_ms": 400, "hold_ms": 100, "buttons": ["cross"]}]}

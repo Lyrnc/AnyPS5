@@ -9,6 +9,9 @@ import tempfile
 from pad_input import BUTTONS, COMMAND_FILE_BYTES, next_sequence
 
 
+MAX_SEQUENCE = 2**64 - 1
+
+
 def load_timeline(path):
     def unique_fields(pairs):
         fields = {}
@@ -28,7 +31,7 @@ def integer(value, field, minimum, maximum):
 
 
 def compile_timeline(document, sequence, repeat=1, gap_ms=200):
-    integer(sequence, "sequence", 1, 2**64 - 1)
+    integer(sequence, "sequence", 1, MAX_SEQUENCE)
     integer(repeat, "repeat", 1, 4096)
     integer(gap_ms, "gap_ms", 0, 3600000)
     if not isinstance(document, dict) or set(document) != {"version", "events"}:
