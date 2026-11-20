@@ -103,6 +103,8 @@ def queue_timeline(path, text):
 
 
 def main(argv=None):
+    from pad_input import resolve_command_path
+
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="backslashreplace")
@@ -113,18 +115,19 @@ def main(argv=None):
     parser.add_argument("--gap-ms", type=int, default=200)
     args = parser.parse_args(argv)
     try:
-        if os.path.realpath(args.timeline) == os.path.realpath(args.path) or (args.path.exists() and os.path.samefile(args.timeline, args.path)):
+        path = resolve_command_path(args.path)
+        if os.path.realpath(args.timeline) == os.path.realpath(path) or (path.exists() and os.path.samefile(args.timeline, path)):
             raise ValueError("the command file must be separate from the timeline JSON")
-        if args.path.is_dir():
+        if path.is_dir():
             raise ValueError(f"{args.path} is a directory")
-        if not args.path.parent.is_dir():
-            raise ValueError(f"directory does not exist: {args.path.parent}")
+        if not path.parent.is_dir():
+            raise ValueError(f"directory does not exist: {path.parent}")
         document = load_timeline(args.timeline)
-        text = compile_timeline(document, next_sequence(args.path), args.repeat, args.gap_ms)
-        queue_timeline(args.path, text)
+        text = compile_timeline(document, next_sequence(path), args.repeat, args.gap_ms)
+        queue_timeline(path, text)
     except (OSError, ValueError, RecursionError) as error:
         parser.exit(2, f"pad_timeline: {error}\n")
-    print(f"Queued {len(text.splitlines()) - 1} timed events in {args.path}")
+    print(f"Queued {len(text.splitlines()) - 1} timed events in {path}")
 
 
 if __name__ == "__main__":

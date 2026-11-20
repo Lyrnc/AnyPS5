@@ -226,6 +226,40 @@ class TimelineTests(unittest.TestCase):
             self.assertEqual(self.run_cli(timeline, linked).returncode, 2)
             self.assertEqual(timeline.read_text(encoding="utf-8"), original)
 
+    def test_cli_preserves_a_symbolic_link_to_the_command_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            timeline = root / "sequence.json"
+            original = json.dumps(self.document)
+            timeline.write_text(original, encoding="utf-8")
+            link = root / "input"
+            relative_target = Path("commands") / "input"
+            target = root / relative_target
+            target.parent.mkdir()
+            try:
+                link.symlink_to(relative_target)
+            except (OSError, NotImplementedError):
+                self.skipTest("symbolic links are unavailable")
+
+            for existing in (False, True):
+                with self.subTest(existing=existing):
+                    if existing:
+                        target.write_bytes(b"1000000000000000000 16384 300\n")
+                    result = self.run_cli(timeline, link)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertTrue(link.is_symlink())
+                    self.assertTrue(target.read_bytes().startswith(b"APS5_PAD_TIMELINE 1 "))
+                    if existing:
+                        self.assertEqual(pad_input.previous_sequence(target), 1000000000000000001)
+
+            link.unlink()
+            link.symlink_to(timeline.name)
+            result = self.run_cli(timeline, link)
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn("the command file must be separate from the timeline JSON", result.stderr)
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(timeline.read_text(encoding="utf-8"), original)
+
     def test_invalid_existing_timeline_can_be_replaced_after_sequence_exhaustion(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

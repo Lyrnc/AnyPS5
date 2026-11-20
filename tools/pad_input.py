@@ -107,6 +107,18 @@ def previous_sequence(path):
     return values[0]
 
 
+def resolve_command_path(path):
+    if not path.is_symlink():
+        return path
+    try:
+        resolved = path.resolve()
+    except RuntimeError as error:
+        raise ValueError(str(error)) from error
+    if resolved.is_symlink():
+        raise ValueError(f"symbolic link loop: {path}")
+    return resolved
+
+
 def next_sequence(path):
     sequence = max(time.monotonic_ns(), previous_sequence(path) + 1)
     if sequence > 2**64 - 1:
@@ -139,13 +151,10 @@ def main():
     except argparse.ArgumentTypeError as error:
         parser.error(str(error))
     requested_path = args.path
-    if requested_path.is_symlink():
-        try:
-            args.path = requested_path.resolve()
-        except (OSError, RuntimeError) as error:
-            parser.error(str(error))
-        if args.path.is_symlink():
-            parser.error(f"symbolic link loop: {requested_path}")
+    try:
+        args.path = resolve_command_path(requested_path)
+    except (OSError, ValueError) as error:
+        parser.error(str(error))
     if args.path.is_dir():
         parser.error(f"{requested_path} is a directory")
     if not args.path.parent.is_dir():
