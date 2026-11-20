@@ -20,6 +20,9 @@ recorded them (when the trace carries batch ids) and, with --stacks, the hottest
 APS5_SAMPLE_WORKER collapsed-stack file. The summary line is read from aps5-summary.jsonl next to the trace
 unless --summary names another file.
 
+With frame bounds, GPU batches and their GPU ranges are measured inside the frame window. CPU recording
+slices are attributed by batch ID and retain their full durations.
+
 Buffer-full markers report lost events even without a summary. Slice-based timings, waits and batch
 inventories then describe retained events only; untraced time is not evidence of idle time.
 The gpu thread's busy time is the union of its retained ranges within the frame window; the producer's summary
@@ -371,21 +374,30 @@ def digest(trace, summary=None, stacks=None, worst=5, top=10):
                                for dur, name, thread, ts in sorted(waits, reverse=True)[:top]]
 
     gpu = {tid for tid, name in trace.threads.items() if name == "gpu"}
-    batches = [entry for entry in trace.batched if entry[0] in gpu and entry[3] == "batch"]
-    if batches:
+    if gpu:
+        batches = []
         ranges = collections.defaultdict(collections.Counter)
         recorded = collections.defaultdict(collections.Counter)
         for tid, ts, dur, name, batch in trace.batched:
-            if tid in gpu:
-                if name != "batch":
-                    ranges[batch][name] += dur
-            else:
+            if tid not in gpu:
                 recorded[batch][(name, trace.name(tid))] += dur
-        result["largest_gpu_batches"] = [{"batch": batch, "ms": dur / 1000.0, "at_ms": ts / 1000.0,
-                                          "present": trace.presents[bisect.bisect_right(starts, ts) - 1][1] if starts and ts >= starts[0] else None,
-                                          "gpu_ranges": [{"name": name, "ms": us / 1000.0} for name, us in ranges[batch].most_common(3)],
-                                          "recorded_by": [{"name": name, "thread": thread, "ms": us / 1000.0} for (name, thread), us in recorded[batch].most_common(4)]}
-                                         for _, ts, dur, _, batch in sorted(batches, key=lambda entry: -entry[2])[:worst]]
+                continue
+            if frames:
+                begin = max(ts, frames[0][1])
+                end = min(ts + dur, frames[-1][2])
+                if end <= begin:
+                    continue
+                ts, dur = begin, end - begin
+            if name == "batch":
+                batches.append((ts, dur, batch))
+            else:
+                ranges[batch][name] += dur
+        if batches:
+            result["largest_gpu_batches"] = [{"batch": batch, "ms": dur / 1000.0, "at_ms": ts / 1000.0,
+                                              "present": trace.presents[bisect.bisect_right(starts, ts) - 1][1] if starts and ts >= starts[0] else None,
+                                              "gpu_ranges": [{"name": name, "ms": us / 1000.0} for name, us in ranges[batch].most_common(3)],
+                                              "recorded_by": [{"name": name, "thread": thread, "ms": us / 1000.0} for (name, thread), us in recorded[batch].most_common(4)]}
+                                             for ts, dur, batch in sorted(batches, key=lambda entry: -entry[1])[:worst]]
 
     if stacks is not None:
         samples = sum(count for _, count in stacks)

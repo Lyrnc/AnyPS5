@@ -19,6 +19,10 @@ def complete(tid, name, ts, dur):
     return {"name": name, "ph": "X", "ts": ts, "dur": dur, "pid": 7, "tid": tid}
 
 
+def tagged(tid, name, ts, dur, batch):
+    return dict(complete(tid, name, ts, dur), args={"batch": batch})
+
+
 EVENTS = [
     {"name": "process_name", "ph": "M", "ts": 0, "pid": 7, "tid": 0, "args": {"name": "AnyPS5"}},
     {"name": "thread_name", "ph": "M", "ts": 0, "pid": 7, "tid": 1, "args": {"name": "queue worker 0x0"}},
@@ -1138,8 +1142,6 @@ class TraceDigestTests(unittest.TestCase):
         self.assertEqual(total, {"a.prx+0x20": 60.0, "a.prx+0x30": 40.0, "a.prx+0x40": 20.0})
 
     def test_largest_gpu_batches_with_their_recording(self):
-        def tagged(tid, name, ts, dur, batch):
-            return dict(complete(tid, name, ts, dur), args={"batch": batch})
         events = EVENTS + [
             {"name": "thread_name", "ph": "M", "ts": 0, "pid": 7, "tid": 3, "args": {"name": "gpu"}},
             tagged(1, "Driver.Packet.dispatch", 4500, 2000, 11),
@@ -1161,6 +1163,44 @@ class TraceDigestTests(unittest.TestCase):
         with contextlib.redirect_stdout(output):
             trace_digest.main([str(self.trace)])
         self.assertIn("**Largest GPU batches**", output.getvalue())
+
+    def test_largest_gpu_batches_are_ranked_by_time_inside_the_frame_window(self):
+        events = EVENTS + [
+            {"name": "thread_name", "ph": "M", "tid": 3, "args": {"name": "gpu"}},
+            tagged(1, "record", -3000, 2000, 11),
+            tagged(3, "batch", 10000, 10000, 11),
+            tagged(3, "draw", 12000, 3000, 11),
+            tagged(3, "batch", 39000, 25000, 12),
+            tagged(3, "copy", 39500, 4000, 12),
+            tagged(3, "draw", 46000, 10000, 12),
+            tagged(3, "batch", 40000, 80000, 13),
+            tagged(3, "batch", -80000, 80000, 14),
+            tagged(3, "batch", -4000, 8000, 15),
+            tagged(3, "dispatch", -3000, 5000, 15),
+        ]
+        self.trace.write_bytes(gzip.compress(json.dumps({"traceEvents": events}).encode("utf-8")))
+        batches = self.json_output(self.trace)["largest_gpu_batches"]
+        self.assertEqual([(batch["batch"], batch["ms"], batch["at_ms"], batch["present"]) for batch in batches],
+                         [(11, 10.0, 10.0, 601), (15, 4.0, 0.0, 600), (12, 1.0, 39.0, 602)])
+        self.assertEqual(batches[0]["recorded_by"], [{"name": "record", "thread": "queue worker 0x0", "ms": 2.0}])
+        self.assertEqual(batches[1]["gpu_ranges"], [{"name": "dispatch", "ms": 2.0}])
+        self.assertEqual(batches[2]["gpu_ranges"], [{"name": "copy", "ms": 0.5}])
+
+        report = subprocess.run([sys.executable, trace_digest.__file__, str(self.trace)],
+                                capture_output=True, text=True, encoding="utf-8", timeout=20, check=True).stdout
+        self.assertIn("batch 12: 1.0 ms at 39 ms, present 602: GPU copy 0.5", report)
+        self.assertNotIn("batch 13:", report)
+        self.assertNotIn("batch 14:", report)
+
+    def test_gpu_batches_without_frame_bounds_keep_the_full_slices(self):
+        events = [
+            {"name": "thread_name", "ph": "M", "tid": 3, "args": {"name": "gpu"}},
+            tagged(3, "batch", 1000, 10000, 11),
+            tagged(3, "draw", 2000, 4000, 11),
+        ]
+        batches = trace_digest.digest(trace_digest.Trace(events))["largest_gpu_batches"]
+        self.assertEqual(batches, [{"batch": 11, "ms": 10.0, "at_ms": 1.0, "present": None,
+                                    "gpu_ranges": [{"name": "draw", "ms": 4.0}], "recorded_by": []}])
 
     def test_no_batch_section_without_batch_ids(self):
         self.assertNotIn("largest_gpu_batches", self.result())
