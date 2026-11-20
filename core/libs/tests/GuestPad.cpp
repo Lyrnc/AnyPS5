@@ -1695,6 +1695,43 @@ static void CheckQueuedMotionSampleTimes(int handle) {
     Require(scePadSetMotionSensorState(handle, false) == PAD_OK);
 }
 
+static void CheckSecondControllerDisconnect(int handle) {
+    constexpr int port = 1;
+    const auto cross = static_cast<std::uint32_t>(Pad::PadButton::Cross);
+    const auto circle = static_cast<std::uint32_t>(Pad::PadButton::Circle);
+    const auto l2 = static_cast<std::uint32_t>(Pad::PadButton::L2);
+    PadInputState held;
+    held.buttons = cross | l2;
+    held.sticks = {10, 20, 30, 40};
+    held.analogButtonsL2 = 210;
+    held.touch[0] = {true, 350, 200, 0};
+
+    PadSetPortConnected_nid_postfix(port, true);
+    PadPublishInputForPort_nid_postfix(port, held);
+    PadData sample{};
+    Require(scePadReadState(handle, &sample) == PAD_OK);
+    Require(sample.connected && sample.buttons == held.buttons && sample.analog_buttons_l2 == 210);
+    Require(sample.left_stick_x == 10 && sample.touch_data_touch_num == 1);
+
+    held.buttons |= circle;
+    PadPublishInputForPort_nid_postfix(port, held);
+    PadSetPortConnected_nid_postfix(port, false);
+    Require(scePadReadState(handle, &sample) == PAD_OK);
+    if (sample.buttons != 0) std::fprintf(stderr, "Disconnected controller retained buttons %#x\n", sample.buttons);
+    Require(!sample.connected && sample.buttons == 0 && sample.analog_buttons_l2 == 0);
+    Require(sample.left_stick_x == 128 && sample.left_stick_y == 128 && sample.right_stick_x == 128 && sample.right_stick_y == 128);
+    Require(sample.touch_data_touch_num == 0);
+
+    PadSetPortConnected_nid_postfix(port, true);
+    PadInputState replacement;
+    replacement.buttons = circle;
+    PadPublishInputForPort_nid_postfix(port, replacement);
+    PadData queued[4]{};
+    Require(scePadRead_nid_postfix(handle, queued, 4) == 1);
+    Require(queued[0].connected && queued[0].buttons == circle && queued[0].touch_data_touch_num == 0);
+    PadSetPortConnected_nid_postfix(port, false);
+}
+
 static void CheckSecondPortConnection(int user) {
     PadControllerInformation info{};
     const int second = scePadOpen_nid_postfix(user + 1, PAD_PORT_TYPE_STANDARD, 0, nullptr);
@@ -1910,6 +1947,7 @@ int main() {
     Require(handle2 == PAD_HANDLE_BASE + 1);
     Require(scePadGetHandle(user2, 0, 0) == handle2);
     Require(scePadIsValidHandle(handle2, PAD_PORT_TYPE_STANDARD) && scePadIsValidHandle(handle, PAD_PORT_TYPE_STANDARD) == false);
+    CheckSecondControllerDisconnect(handle2);
 
     PadInputState p2Input{};
     p2Input.buttons = static_cast<std::uint32_t>(Pad::PadButton::Triangle);

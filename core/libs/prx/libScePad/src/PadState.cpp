@@ -669,7 +669,20 @@ void Pad::SetMotionEnabled(bool enabled) {
 void Pad::SetConnected(int port, bool connected) {
     if (port < 0 || port >= PAD_MAX_CONTROLLERS) return;
     std::lock_guard lock(stateMutex);
-    slots[port].connected = connected;
+    auto& slot = slots[port];
+    if (slot.connected == connected) return;
+    slot.connected = connected;
+    if (connected || port == 0) return;
+
+    slot.state = {};
+    slot.queue.clear();
+    slot.pressedSinceRead = 0;
+    slot.pressedAnalogL2 = 0;
+    slot.pressedAnalogR2 = 0;
+    std::ranges::fill(slot.prevTouchActive, false);
+    slot.orientation = {};
+    slot.lastFuseTime = 0;
+    std::ranges::fill(slot.biasIntegral, 0.0f);
 }
 
 bool Pad::IsConnected(int port) {
