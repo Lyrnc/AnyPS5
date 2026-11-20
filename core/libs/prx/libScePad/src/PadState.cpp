@@ -8,6 +8,7 @@
 #include "prx/libkernel/Time/include/Time.hpp"
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -61,7 +62,7 @@ namespace {
         std::uint32_t pressedSinceRead = 0;
         std::uint8_t pressedAnalogL2 = 0;
         std::uint8_t pressedAnalogR2 = 0;
-        std::uint64_t pressedAt = 0;
+        std::array<std::uint64_t, 32> pressedAt{};
         std::uint64_t lastReadAt = 0;
         std::uint64_t readInterval = 0;
         bool connected = false;
@@ -426,6 +427,16 @@ void ApplyRecording(PadData& data, std::uint64_t now) {
 std::uint64_t LatchExpiry(const PadSlot& slot) {
     return std::clamp(slot.readInterval + slot.readInterval / 2, kLatchExpiry, kLatchExpiryLimit);
 }
+
+std::uint32_t LatchedButtons(const PadSlot& slot, std::uint64_t now) {
+    const auto expiry = LatchExpiry(slot);
+    std::uint32_t buttons = 0;
+    for (auto pending = slot.pressedSinceRead; pending != 0; pending &= pending - 1) {
+        const auto index = static_cast<std::size_t>(std::countr_zero(pending));
+        if (now - slot.pressedAt[index] <= expiry) buttons |= std::uint32_t{1} << index;
+    }
+    return buttons;
+}
 }
 
 PadData Pad::ReadState(int port) {
@@ -438,10 +449,11 @@ PadData Pad::ReadState(int port) {
     auto& slot = slots[port];
     const bool withdrawn = WithdrawnPort(port, slot);
     PadData data = withdrawn ? WithdrawnData(slot.timestamp) : BuildData(slot, slot.state, now, now, injected, port);
-    if (!withdrawn && !slot.state.intercepted && slot.pressedSinceRead != 0 && now - slot.pressedAt <= LatchExpiry(slot)) {
-        data.buttons |= slot.pressedSinceRead;
-        if (slot.pressedSinceRead & 0x100u) data.analog_buttons_l2 = std::max(data.analog_buttons_l2, slot.pressedAnalogL2);
-        if (slot.pressedSinceRead & 0x200u) data.analog_buttons_r2 = std::max(data.analog_buttons_r2, slot.pressedAnalogR2);
+    if (!withdrawn && !slot.state.intercepted && slot.pressedSinceRead != 0) {
+        const auto latched = LatchedButtons(slot, now);
+        data.buttons |= latched;
+        if (latched & 0x100u) data.analog_buttons_l2 = std::max(data.analog_buttons_l2, slot.pressedAnalogL2);
+        if (latched & 0x200u) data.analog_buttons_r2 = std::max(data.analog_buttons_r2, slot.pressedAnalogR2);
     }
     slot.pressedSinceRead = 0;
     if (slot.lastReadAt != 0) slot.readInterval = now - slot.lastReadAt;
@@ -696,17 +708,13 @@ extern "C" void PadPublishInputForPort_nid_postfix(int port, const PadInputState
         if (!slot.state.intercepted) slot.queue.clear();
     } else {
         const std::uint32_t pressed = input.buttons & ~slot.state.buttons;
-        if (pressed != 0) {
-            if (slot.pressedSinceRead != 0 && slot.timestamp - slot.pressedAt > LatchExpiry(slot)) {
-                slot.pressedSinceRead = 0;
-                slot.pressedAnalogL2 = 0;
-                slot.pressedAnalogR2 = 0;
-            }
-            slot.pressedSinceRead |= pressed;
-            slot.pressedAt = slot.timestamp;
-            if (pressed & 0x100u) slot.pressedAnalogL2 = input.analogButtonsL2;
-            if (pressed & 0x200u) slot.pressedAnalogR2 = input.analogButtonsR2;
+        for (auto pending = pressed; pending != 0; pending &= pending - 1) {
+            const auto index = static_cast<std::size_t>(std::countr_zero(pending));
+            slot.pressedAt[index] = slot.timestamp;
         }
+        slot.pressedSinceRead |= pressed;
+        if (pressed & 0x100u) slot.pressedAnalogL2 = input.analogButtonsL2;
+        if (pressed & 0x200u) slot.pressedAnalogR2 = input.analogButtonsR2;
     }
     slot.state = input;
     if (slot.queue.size() == kQueueCapacity) slot.queue.pop_front();

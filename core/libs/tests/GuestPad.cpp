@@ -735,6 +735,35 @@ static void CheckLatchedPressAtSlowReads(int handle) {
     Require((data.buttons & cross) == 0);
 }
 
+static void CheckLatchedPressesExpireIndependently(int handle) {
+    const auto cross = static_cast<std::uint32_t>(Pad::PadButton::Cross);
+    const auto circle = static_cast<std::uint32_t>(Pad::PadButton::Circle);
+    const auto l2 = static_cast<std::uint32_t>(Pad::PadButton::L2);
+    const auto r2 = static_cast<std::uint32_t>(Pad::PadButton::R2);
+    PadData data{};
+    Require(scePadReadState(handle, &data) == PAD_OK);
+    std::this_thread::sleep_for(std::chrono::milliseconds(350));
+    Require(scePadReadState(handle, &data) == PAD_OK);
+
+    PadInputState first;
+    first.buttons = cross | l2;
+    first.analogButtonsL2 = 83;
+    PadPublishInput_nid_postfix(first);
+    PadPublishInput_nid_postfix(PadInputState{});
+    std::this_thread::sleep_for(std::chrono::milliseconds(280));
+
+    PadInputState second;
+    second.buttons = circle | r2;
+    second.analogButtonsR2 = 97;
+    PadPublishInput_nid_postfix(second);
+    PadPublishInput_nid_postfix(PadInputState{});
+    std::this_thread::sleep_for(std::chrono::milliseconds(280));
+    Require(scePadReadState(handle, &data) == PAD_OK);
+    if ((data.buttons & (cross | l2)) != 0) std::fprintf(stderr, "An expired pad press survived a newer tap: %#x\n", data.buttons);
+    Require((data.buttons & (cross | circle | l2 | r2)) == (circle | r2));
+    Require(data.analog_buttons_l2 == 0 && data.analog_buttons_r2 == 97);
+}
+
 static void CheckLatchedPressPerPort() {
     const auto cross = static_cast<std::uint32_t>(Pad::PadButton::Cross);
     PadInputState pressed;
@@ -1847,6 +1876,7 @@ int main() {
     CheckCaptureHidesEarlierInput();
     CheckLatchedPressLifetime(handle);
     CheckLatchedPressAtSlowReads(handle);
+    CheckLatchedPressesExpireIndependently(handle);
     CheckLatchedPressPerPort();
     CheckReadStateHandle(handle);
     CheckHeldSampleTimes(handle);
