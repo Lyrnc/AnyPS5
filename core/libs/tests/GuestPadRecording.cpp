@@ -2,6 +2,7 @@
 #include "prx/libScePad/include/Pad.hpp"
 #include "prx/libScePad/include/PadState.hpp"
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -48,8 +49,8 @@ bool Replayed(const PadData& data) {
         data.analog_buttons_l2 == 0 && data.analog_buttons_r2 == 200;
 }
 
-bool Idle(const PadData& data) {
-    return data.buttons == 0 && data.left_stick_x == 128 && data.left_stick_y == 128 && data.right_stick_x == 128 && data.right_stick_y == 128 &&
+bool Neutral(const PadData& data, std::uint32_t buttons = 0) {
+    return data.buttons == buttons && data.left_stick_x == 128 && data.left_stick_y == 128 && data.right_stick_x == 128 && data.right_stick_y == 128 &&
         data.analog_buttons_l2 == 0 && data.analog_buttons_r2 == 0;
 }
 
@@ -94,20 +95,43 @@ int main() {
     Require(Pad::Read(empty, 8, 0) == 1 && Replayed(empty[0]), "scePadRead without queued input returned the live controller");
     Require(Pad::ReadState(1).buttons != 0x4000, "the replay of port 0 reached port 1");
 
+    constexpr std::uint32_t intercepted = 0x80000000u;
+    PadInputState captured;
+    captured.intercepted = true;
+    PadPublishInput_nid_postfix(captured);
+    Require(scePadReadState(handle, &state) == PAD_OK && Neutral(state, intercepted),
+        "scePadReadState replay bypassed modal input capture");
+    Require(scePadRead_nid_postfix(handle, queued, 8) == 1 && Neutral(queued[0], intercepted),
+        "scePadRead replay replaced a queued intercepted sample");
+    Require(scePadRead_nid_postfix(handle, empty, 8) == 1 && Neutral(empty[0], intercepted),
+        "scePadRead replay bypassed modal capture when the queue was empty");
+    PadPublishInput_nid_postfix(live);
+    Require(scePadReadState(handle, &state) == PAD_OK && Replayed(state), "replay did not resume after modal capture");
+
+    PadPublishInput_nid_postfix(captured);
+    Require(scePadReadState(handle, &state) == PAD_OK && Neutral(state, intercepted), "a second modal capture did not intercept the replay");
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
-    Require(Idle(Pad::ReadState(0)), "the replay did not move to the change recorded at 150 ms");
+    Require(scePadReadState(handle, &state) == PAD_OK && Neutral(state, intercepted), "a replay change reached the title during modal capture");
+    PadPublishInput_nid_postfix(live);
+    Require(Neutral(Pad::ReadState(0)), "the replay did not advance while modal capture was active");
     Require(scePadClose_nid_postfix(handle) == PAD_OK, "scePadClose failed");
 
     std::stringstream text;
     text << std::ifstream(record, std::ios::binary).rdbuf();
-    std::string header, first, second, extra;
+    std::string header, first, capturedLine, resumed, capturedAgain, last, extra;
     std::getline(text, header);
     std::getline(text, first);
-    std::getline(text, second);
+    std::getline(text, capturedLine);
+    std::getline(text, resumed);
+    std::getline(text, capturedAgain);
+    std::getline(text, last);
     Require(header == "APS5_PAD_RECORDING 1", "the recording has no header");
     Require(first == "0 4000 255 0 128 128 0 200", "the recording does not start with the state the title read first");
-    const auto space = second.find(' ');
-    Require(space != std::string::npos && std::stoull(second.substr(0, space)) >= 150 && second.substr(space) == " 0 128 128 128 128 0 0",
+    Require(capturedLine.ends_with(" 80000000 128 128 128 128 0 0"), "the recording omits the intercepted state");
+    Require(resumed.ends_with(" 4000 255 0 128 128 0 200"), "the recording omits the resumed replay state");
+    Require(capturedAgain.ends_with(" 80000000 128 128 128 128 0 0"), "the recording omits the second intercepted state");
+    const auto space = last.find(' ');
+    Require(space != std::string::npos && std::stoull(last.substr(0, space)) >= 150 && last.substr(space) == " 0 128 128 128 128 0 0",
         "the recording does not hold the later change once, after its time");
     Require(!std::getline(text, extra), "the recording repeats a state the title read again");
 
