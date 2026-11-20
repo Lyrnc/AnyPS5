@@ -123,10 +123,52 @@ class IntervalCsvTests(unittest.TestCase):
                     self.assertEqual(completed.returncode, 2, completed.stderr)
                     self.assertEqual(completed.stdout, b"")
                     self.assertIn(b"error: capture is empty, has dropped events or changing identity", completed.stderr)
-            path.write_bytes((json.dumps(first) + "\n" + json.dumps(interval_line(30.0, 60.0, 20.0, 5.0, commit="a" * 40)) + "\n").encode())
+            second["commit"] = first["commit"]
+            second["window"]["first_present"] = first["presents"]
+            path.write_text("\n".join(map(json.dumps, (first, second))) + "\n", encoding="utf-8")
             same = subprocess.run(command, capture_output=True)
             self.assertEqual(same.returncode, 0, same.stderr)
             self.assertEqual(len(list(csv.DictReader(io.StringIO(same.stdout.decode(), newline="")))), 2)
+
+    def test_require_complete_checks_present_numbers_even_when_times_are_adjacent(self):
+        first = interval_line(0, 30, 20, 5, presents=1200)
+        first["window"]["first_present"] = 42
+        second = interval_line(30, 60, 20, 5)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "aps5-summary.jsonl"
+            command = [sys.executable, trace_intervals_csv.__file__, str(path)]
+            for present in (1242, 1243, 1241, 0, -1, True, None):
+                with self.subTest(first_present=present):
+                    second["window"]["first_present"] = present
+                    path.write_text("\n".join(map(json.dumps, (first, second))) + "\n", encoding="utf-8")
+                    ordinary = subprocess.run(command, capture_output=True, encoding="utf-8", timeout=10)
+                    strict = subprocess.run([*command, "--require-complete"], capture_output=True, encoding="utf-8", timeout=10)
+                    self.assertEqual(ordinary.returncode, 0, ordinary.stderr)
+                    if present == 1242:
+                        self.assertEqual((strict.returncode, strict.stdout), (0, ordinary.stdout), strict.stderr)
+                    else:
+                        self.assertEqual((strict.returncode, strict.stdout), (2, ""), strict.stderr)
+                        diagnostic = ("expected present 1242" if type(present) is int and present >= 0
+                                      else "window.first_present must be a non-negative integer")
+                        self.assertIn(diagnostic, strict.stderr)
+
+    def test_require_complete_tracks_presents_across_legacy_intervals_without_numbers(self):
+        first = interval_line(0, 30, 20, 5, presents=1200)
+        legacy = interval_line(30, 60, 20, 5, presents=500)
+        legacy.pop("window")
+        last = interval_line(60, 90, 20, 5)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "aps5-summary.jsonl"
+            command = [sys.executable, trace_intervals_csv.__file__, str(path), "--require-complete"]
+            for present, code in ((1700, 0), (1800, 2)):
+                with self.subTest(first_present=present):
+                    last["window"]["first_present"] = present
+                    path.write_text("\n".join(map(json.dumps, (first, legacy, last))), encoding="utf-8")
+                    strict = subprocess.run(command, capture_output=True, encoding="utf-8", timeout=10)
+                    self.assertEqual(strict.returncode, code, strict.stderr)
+                    if code:
+                        self.assertEqual(strict.stdout, "")
+                        self.assertIn("expected present 1700", strict.stderr)
 
     def test_unusable_input_is_a_cli_error(self):
         with tempfile.TemporaryDirectory() as directory:

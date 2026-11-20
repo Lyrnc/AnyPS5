@@ -31,6 +31,21 @@ def render(result, spreadsheet_safe=False):
     return output.getvalue()
 
 
+def validate_present_sequence(intervals):
+    expected = None
+    for index, interval in enumerate(intervals, start=1):
+        window = interval.get("window")
+        if isinstance(window, dict) and "first_present" in window:
+            first = window["first_present"]
+            if type(first) is not int or first < 0:
+                raise ValueError(f"interval {index}: window.first_present must be a non-negative integer")
+            if expected is not None and first != expected:
+                raise ValueError(f"interval {index} begins at present {first}; expected present {expected}")
+            expected = first
+        if expected is not None:
+            expected += interval["presents"]
+
+
 def main(argv=None):
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
@@ -43,7 +58,8 @@ def main(argv=None):
                         help="opt-in tab prefix changes text cells; spreadsheet behavior varies and save/reopen not guaranteed")
     args = parser.parse_args(argv)
     try:
-        result = trace_digest.digest_intervals(trace_digest.load_intervals(args.summary))
+        records = trace_digest.load_intervals(args.summary)
+        result = trace_digest.digest_intervals(records)
         if args.require_complete:
             intervals = result["intervals"]
             if not intervals or result["identity_changed_at"] or any(row["trace_dropped"] for row in intervals):
@@ -55,6 +71,8 @@ def main(argv=None):
                     raise ValueError(f"interval {index} starts at {start} s; previous interval ends at {previous_end} s")
                 previous_end = row["end_s"]
         text = render(result, args.spreadsheet_safe)
+        if args.require_complete:
+            validate_present_sequence(records)
     except (EOFError, OSError, ValueError, KeyError, TypeError, RecursionError) as error:
         parser.error(str(error))
     sys.stdout.write(text)
