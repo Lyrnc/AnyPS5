@@ -256,6 +256,18 @@ class RebaseVerifyTests(unittest.TestCase):
         self.git("commit", "-q", "--amend", "--no-edit", "--author=Someone Else <other@example.com>", "-a")
         self.assertIn("authors or subjects differ between the old and the new commits", self.verify())
 
+    def test_a_removed_unicode_subject_separator_is_reported(self):
+        subject = "feat(tools): add a tail line"
+        message = self.root / ".git" / "test-message"
+        message.write_bytes((subject + "\u2028\n").encode("utf-8"))
+        for branch in ("old", "new"):
+            self.git("checkout", "-q", branch)
+            self.git("commit", "-q", "--amend", "-F", str(message))
+        self.assertEqual(self.verify(), [])
+
+        self.git("commit", "-q", "--amend", "-m", subject)
+        self.assertEqual(self.verify(), ["authors or subjects differ between the old and the new commits"])
+
     def test_a_dropped_commit_is_reported(self):
         self.git("reset", "-q", "--hard", "main")
         self.git("cherry-pick", f"{self.old}~2..{self.old}~1")

@@ -28,8 +28,9 @@ def default_onto(root, name=None):
 
 
 def people(root, base, tip):
-    lines = git(root, "log", "--no-merges", "--format=%an <%ae>%x1f%s", f"{base}..{tip}").splitlines()
-    return collections.Counter(line for line in lines if line)
+    output = git(root, "log", "-z", "--no-merges", "--format=%an <%ae>%x1f%s", f"{base}..{tip}", raw=True)
+    records = output.decode("utf-8", "replace").split("\0")
+    return collections.Counter(record for record in records if record)
 
 
 def commits(root, base, tip):
