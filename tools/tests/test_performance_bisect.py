@@ -120,6 +120,16 @@ class SummaryValidationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "not the requested clean commit"):
                 performance_bisect.sample_summary(path, "PPSA00000", GOOD)
 
+    def test_sample_reports_invalid_title_map_without_a_traceback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "summary.json"
+            for titles in (None, [], "PPSA00000"):
+                with self.subTest(titles=titles):
+                    summary = {"build": {"commit": GOOD[:7], "dirty": False}, "machine": IDENTITY, "titles": titles}
+                    path.write_text(json.dumps(summary), encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, "summary.json: title runner summary is missing machine or title data"):
+                        performance_bisect.sample_summary(path, "PPSA00000", GOOD)
+
     def test_sample_rejects_non_rendering_and_non_finite_fps(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "summary.json"

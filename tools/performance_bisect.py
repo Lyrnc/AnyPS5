@@ -105,7 +105,8 @@ def sample_summary(path, title_id, commit):
     if not isinstance(built_commit, str) or not 7 <= len(built_commit) <= 40 or not commit.startswith(built_commit) or build.get("dirty") is not False:
         raise ValueError(f"{path}: measured build is not the requested clean commit {commit}")
     machine = summary.get("machine")
-    title = summary.get("titles", {}).get(title_id)
+    titles = summary.get("titles")
+    title = titles.get(title_id) if isinstance(titles, dict) else None
     if not isinstance(machine, dict) or not isinstance(title, dict):
         raise ValueError(f"{path}: title runner summary is missing machine or title data")
     run_list = title.get("runs")
