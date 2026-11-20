@@ -182,6 +182,50 @@ class TimelineTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), b"new\n")
             self.assertEqual(list(Path(directory).iterdir()), [path])
 
+    @unittest.skipUnless(os.name == "nt", "Windows command file sharing")
+    def test_both_tools_retry_after_reader_closes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            timeline, output = root / "sequence.json", root / "command"
+            timeline.write_text(json.dumps(self.document), encoding="utf-8")
+            for main, arguments, expected in (
+                (pad_input.main, [str(output), "cross"], b"2001 16384 300\n"),
+                (pad_timeline.main, [str(timeline), str(output)],
+                 b"APS5_PAD_TIMELINE 1 2001 2\n200 100 18432\n500 200 64\n"),
+            ):
+                with self.subTest(tool=main.__module__):
+                    original = b"1 0 100\n"
+                    output.write_bytes(original)
+                    with output.open("rb") as reader:
+                        def release_reader(_delay):
+                            self.assertEqual(output.read_bytes(), original)
+                            self.assertEqual(set(root.iterdir()), {timeline, output})
+                            reader.close()
+                            output.write_bytes(b"2000 16 100\n")
+
+                        with mock.patch.object(sys, "argv", [main.__module__, *arguments]), \
+                                mock.patch.object(pad_input.time, "monotonic_ns", return_value=1000), \
+                                mock.patch.object(pad_input.time, "sleep", side_effect=release_reader) as sleep, \
+                                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                            main()
+                        sleep.assert_called_once()
+                    self.assertEqual(output.read_bytes(), expected)
+                    self.assertEqual(set(root.iterdir()), {timeline, output})
+
+    @unittest.skipUnless(os.name == "nt", "Windows command file sharing")
+    def test_persistent_reader_preserves_command_after_bounded_retries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "command"
+            original = b"1 0 100\n"
+            path.write_bytes(original)
+            with path.open("rb"), mock.patch.object(pad_input.time, "sleep") as sleep, \
+                    mock.patch.object(sys, "argv", ["pad_input.py", str(path), "cross"]):
+                with self.assertRaises(PermissionError):
+                    pad_input.main()
+            self.assertEqual(sleep.call_count, 4)
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(list(Path(directory).iterdir()), [path])
+
     def run_cli(self, timeline, output, *arguments):
         env = dict(os.environ, PYTHONIOENCODING="utf-8")
         return subprocess.run([sys.executable, str(Path(pad_timeline.__file__)), str(timeline), str(output), *arguments],

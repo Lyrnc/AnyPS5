@@ -1,12 +1,10 @@
 import argparse
 import json
 import os
-import stat
 from pathlib import Path
 import sys
-import tempfile
 
-from pad_input import BUTTONS, COMMAND_FILE_BYTES, next_sequence
+from pad_input import BUTTONS, COMMAND_FILE_BYTES, queue_command, write_command as queue_timeline
 
 
 def load_timeline(path):
@@ -80,28 +78,6 @@ def compile_timeline(document, sequence, repeat=1, gap_ms=200):
     return text
 
 
-def queue_timeline(path, text):
-    metadata = None
-    if os.name == "posix":
-        try:
-            metadata = path.stat()
-        except FileNotFoundError:
-            pass
-    temporary = None
-    try:
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n", dir=path.parent, delete=False) as output:
-            temporary = Path(output.name)
-            if metadata is not None:
-                if os.geteuid() == 0:
-                    os.fchown(output.fileno(), metadata.st_uid, metadata.st_gid)
-                os.fchmod(output.fileno(), stat.S_IMODE(metadata.st_mode))
-            output.write(text)
-        os.replace(temporary, path)
-    finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
-
-
 def main(argv=None):
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
@@ -120,8 +96,7 @@ def main(argv=None):
         if not args.path.parent.is_dir():
             raise ValueError(f"directory does not exist: {args.path.parent}")
         document = load_timeline(args.timeline)
-        text = compile_timeline(document, next_sequence(args.path), args.repeat, args.gap_ms)
-        queue_timeline(args.path, text)
+        text = queue_command(args.path, lambda sequence: compile_timeline(document, sequence, args.repeat, args.gap_ms))
     except (OSError, ValueError, RecursionError) as error:
         parser.exit(2, f"pad_timeline: {error}\n")
     print(f"Queued {len(text.splitlines()) - 1} timed events in {args.path}")

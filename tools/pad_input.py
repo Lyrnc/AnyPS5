@@ -114,6 +114,40 @@ def next_sequence(path):
     return sequence
 
 
+def write_command(path, text):
+    metadata = None
+    if os.name == "posix":
+        try:
+            metadata = path.stat()
+        except FileNotFoundError:
+            pass
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n", dir=path.parent, delete=False) as output:
+            temporary = Path(output.name)
+            if metadata is not None:
+                if os.geteuid() == 0:
+                    os.fchown(output.fileno(), metadata.st_uid, metadata.st_gid)
+                os.fchmod(output.fileno(), stat.S_IMODE(metadata.st_mode))
+            output.write(text)
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def queue_command(path, render):
+    for delay in (0.01, 0.02, 0.04, 0.08, None):
+        try:
+            text = render(next_sequence(path))
+            write_command(path, text)
+            return text
+        except PermissionError as error:
+            if delay is None or getattr(error, "winerror", None) not in (5, 32):
+                raise
+            time.sleep(delay)
+
+
 def button_mask(value):
     names = value.split("+")
     if any(name not in BUTTONS for name in names) or ("release" in names and len(names) > 1) or len(set(names)) != len(names):
@@ -156,28 +190,9 @@ def main():
             parser.error("stick axes must be between 0 and 255")
         sticks = "".join(f" {axis}" for axis in axes)
     try:
-        sequence = next_sequence(args.path)
+        queue_command(args.path, lambda sequence: f"{sequence} {mask} {args.hold_ms}{sticks}{touch}\n")
     except ValueError as error:
         parser.error(str(error))
-    metadata = None
-    if os.name == "posix":
-        try:
-            metadata = args.path.stat()
-        except FileNotFoundError:
-            pass
-    temporary = None
-    try:
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n", dir=args.path.parent, delete=False) as output:
-            temporary = Path(output.name)
-            if metadata is not None:
-                if os.geteuid() == 0:
-                    os.fchown(output.fileno(), metadata.st_uid, metadata.st_gid)
-                os.fchmod(output.fileno(), stat.S_IMODE(metadata.st_mode))
-            output.write(f"{sequence} {mask} {args.hold_ms}{sticks}{touch}\n")
-        os.replace(temporary, args.path)
-    finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
     print(f"Queued {args.button}{' with sticks' + sticks if sticks else ''} for {args.hold_ms} ms in {args.path}")
 
 
