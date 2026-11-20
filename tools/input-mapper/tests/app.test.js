@@ -37,6 +37,12 @@ class MockElement extends EventTarget {
         this.children = [];
         this.append(...nodes);
     }
+    replaceWith(node) {
+        const parent = this.parentElement;
+        parent.children[parent.children.indexOf(this)] = node;
+        node.parentElement = parent;
+        this.parentElement = null;
+    }
     focus() { this.focused = true; }
     click() { this.dispatchEvent(new Event('click')); }
     closest(selector) {
@@ -91,6 +97,7 @@ async function setup(t, name) {
         queueMicrotask(() => replaceDialog.dispatchEvent(new Event('close')));
     };
     get('capture-dialog').close = () => {};
+    get('capture-dialog').showModal = () => {};
     get('picker-dialog').close = () => {};
     const globals = {
         document: {
@@ -118,6 +125,11 @@ async function setup(t, name) {
     await import(new URL(`../app.js?${name}`, import.meta.url));
     return {
         get,
+        action: name => root.querySelector(`[data-action="${name}"]`),
+        search(value) {
+            get('search').value = value;
+            get('search').dispatchEvent(new Event('input'));
+        },
         setDialogDecision(value) { dialogDecision = value; },
         dialogOpens: () => dialogOpens,
         async importFile(filename, text) {
@@ -142,6 +154,104 @@ test('cancelling replacement keeps the previous import report hidden and preserv
     assert.equal(app.get('import-report').children.length, 0);
     assert.equal(app.get('status').textContent, '');
     assert.equal(app.get('preview').value, '');
+});
+
+test('adding a binding found by its default input keeps the new editor visible and focused', async t => {
+    const app = await setup(t, 'add-filtered');
+    app.search('F7');
+    assert.equal(app.action('ToggleMouse').hidden, false);
+    app.action('ToggleMouse').querySelector('.add-binding').click();
+
+    const action = app.action('ToggleMouse');
+    assert.equal(action.hidden, false);
+    assert.equal(action.parentElement.hidden, false);
+    assert.equal(app.get('search').value, '');
+    assert.equal(action.querySelectorAll('.dropdown-trigger')[1].focused, true);
+    assert.equal(app.action('Cross').hidden, true);
+});
+
+test('editing a binding keeps its row visible and preserves a search that still matches', async t => {
+    const app = await setup(t, 'edit-filtered');
+    await app.importFile('anyps5-input.ini', 'Cross = KEY:J\n');
+    const action = app.action('Cross');
+    const [type, value] = action.querySelectorAll('select');
+
+    app.search('cross');
+    value.value = 'K';
+    value.dispatchEvent(new Event('change'));
+    assert.equal(app.get('search').value, 'cross');
+    assert.equal(app.get('preview').value, 'Cross = KEY:K\n');
+
+    app.search('K');
+    type.value = 'MOUSE';
+    type.dispatchEvent(new Event('change'));
+    assert.equal(app.get('search').value, '');
+    assert.equal(action.hidden, false);
+    assert.equal(action.parentElement.hidden, false);
+    const mouse = action.querySelectorAll('select')[1];
+    mouse.value = 'Left';
+    mouse.dispatchEvent(new Event('change'));
+    assert.equal(app.get('preview').value, 'Cross = MOUSE:Left\n');
+
+    app.search('mouse:left');
+    mouse.value = 'Right';
+    mouse.dispatchEvent(new Event('change'));
+    assert.equal(action.hidden, false);
+    assert.equal(app.get('preview').value, 'Cross = MOUSE:Right\n');
+});
+
+test('capturing a replacement key keeps the edited action visible', async t => {
+    const app = await setup(t, 'capture-filtered');
+    await app.importFile('anyps5-input.ini', 'Screenshot = KEY:F12\n');
+    app.search('F12');
+    const action = app.action('Screenshot');
+    const capture = action.querySelector('.binding').querySelectorAll('button')[2];
+    capture.click();
+    window.dispatchEvent(Object.assign(new Event('keydown', {cancelable: true}), {code: 'F2', key: 'F2'}));
+
+    assert.equal(action.hidden, false);
+    assert.equal(capture.focused, true);
+    assert.equal(app.get('preview').value, 'Screenshot = KEY:F2\n');
+});
+
+test('editing a searched chord keeps its open picker available to finish the new chord', async t => {
+    const app = await setup(t, 'chord-filtered');
+    await app.importFile('anyps5-input.ini', 'Screenshot = PAD:L1+R1\n');
+    app.search('pad:r1+l1');
+    const action = app.action('Screenshot');
+    const picker = action.querySelector('.chord-picker');
+    const buttons = picker.querySelector('.chord-buttons');
+    picker.open = true;
+    buttons.querySelectorAll('input').find(button => button.value === 'R1').checked = false;
+    buttons.dispatchEvent(new Event('change'));
+
+    assert.equal(action.hidden, false);
+    assert.equal(picker.open, true);
+    buttons.querySelectorAll('input').find(button => button.value === 'R2').checked = true;
+    buttons.dispatchEvent(new Event('change'));
+    assert.equal(app.get('preview').value, 'Screenshot = PAD:L1+R2\n');
+});
+
+test('recognized import filenames restore the target profile after successful replacement only', async t => {
+    const app = await setup(t, 'import-profile-name');
+    const title = app.get('profile-title-id');
+    await app.importFile('anyps5-input.Demo-01_a.ini', 'Cross = KEY:J\n');
+    assert.equal(title.value, 'Demo-01_a');
+    assert.equal(app.get('preview-name').textContent, 'anyps5-input.Demo-01_a.ini');
+
+    app.action('Cross').querySelector('.add-binding').click();
+    await app.importFile('anyps5-input.PPSA00002.ini', 'Cross = KEY:K\n');
+    assert.equal(title.value, 'Demo-01_a');
+
+    app.setDialogDecision('discard');
+    await app.importFile('anyps5-input.PPSA00002.ini', 'NotAnAction = KEY:K\n');
+    assert.equal(title.value, 'Demo-01_a');
+    await app.importFile('backup.ini', 'Cross = KEY:K\n');
+    assert.equal(title.value, 'Demo-01_a');
+
+    await app.importFile('anyps5-input.ini', 'Cross = KEY:L\n');
+    assert.equal(title.value, '');
+    assert.equal(app.get('preview-name').textContent, 'anyps5-input.ini');
 });
 
 test('cancelling replacement preserves an earlier import report until replacement is confirmed', async t => {

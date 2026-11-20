@@ -46,10 +46,19 @@ export function actionsForInput(search, bindings) {
     }));
 }
 
+const inputBaseName = 'anyps5-input';
+
 export function inputFilename(titleId) {
-    if (titleId === '') return 'anyps5-input.ini';
+    if (titleId === '') return `${inputBaseName}.ini`;
     if (typeof titleId !== 'string' || titleId.length > 32 || /[^A-Za-z0-9_-]/u.test(titleId)) return undefined;
-    return `anyps5-input.${titleId}.ini`;
+    return `${inputBaseName}.${titleId}.ini`;
+}
+
+export function titleIdFromFilename(filename) {
+    if (filename === inputFilename('')) return '';
+    if (!filename.startsWith(`${inputBaseName}.`) || !filename.endsWith('.ini')) return undefined;
+    const titleId = filename.slice(inputBaseName.length + 1, -4);
+    return inputFilename(titleId) === filename ? titleId : undefined;
 }
 
 export function typesForAction(action) {

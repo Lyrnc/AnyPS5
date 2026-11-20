@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {actions, actionsForInput, chordButtons, defaults, emulatorActions, inputFilename, mouseValues, padButtons, typesForAction} from '../mapping.js';
+import {actions, actionsForInput, chordButtons, defaults, emulatorActions, inputFilename, mouseValues, padButtons, titleIdFromFilename, typesForAction} from '../mapping.js';
 import {exportableKeys, keyNames} from '../keys.js';
 import {captureKey} from '../capture.js';
 import {parseIni, serialize, settings, validate, validateSettings} from '../validation.js';
@@ -21,6 +21,16 @@ test('title names use the native length limit and reject invalid filename charac
     assert.equal(inputFilename(longestId), `anyps5-input.${longestId}.ini`);
     for (const invalid of [`${longestId}A`, '../PPSA29802', 'foo\\bar', 'with space', ' ', 'C:demo', 'Títle', 'PPSA29802\n', null]) {
         assert.equal(inputFilename(invalid), undefined);
+    }
+});
+
+test('recognizes only canonical shared and per-game filenames on import', () => {
+    for (const titleId of ['', 'Demo-01_a', 'PPSA29802', 'A'.repeat(32)]) {
+        assert.equal(titleIdFromFilename(inputFilename(titleId)), titleId);
+    }
+    for (const filename of ['backup.ini', 'anyps5-input..ini', 'anyps5-input.Demo.01.ini',
+        'anyps5-input.Demo 01.ini', 'anyps5-input.PPSA29802.ini.bak', `anyps5-input.${'A'.repeat(33)}.ini`]) {
+        assert.equal(titleIdFromFilename(filename), undefined);
     }
 });
 

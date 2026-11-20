@@ -1,4 +1,4 @@
-import {actions, actionsForInput, chordButtons, defaults, groups, inputFilename, mouseValues, typesForAction, wheelValues} from './mapping.js';
+import {actions, actionsForInput, chordButtons, defaults, groups, inputFilename, mouseValues, titleIdFromFilename, typesForAction, wheelValues} from './mapping.js';
 import {exportableKeys} from './keys.js';
 import {captureKey} from './capture.js';
 import {parseIni, serialize, validate} from './validation.js';
@@ -204,7 +204,7 @@ function renderChordControl(entry, label) {
     options.addEventListener('change', () => {
         entry.value = checkboxes.filter(checkbox => checkbox.checked).map(checkbox => checkbox.value).join('+');
         updateSummary();
-        updateOutput();
+        updateOutput(entry.action);
     });
     control.dir = 'ltr';
     control.append(summary, options);
@@ -221,7 +221,7 @@ function renderBindingValue(entry, label) {
     control.element.dir = 'ltr';
     control.select.addEventListener('change', () => {
         entry.value = control.select.value;
-        updateOutput();
+        updateOutput(entry.action);
     });
     bindingControls.set(entry, control);
     return control.element;
@@ -257,13 +257,13 @@ function renderBinding(entry, position) {
         value.replaceWith(next);
         value = next;
         capture.disabled = entry.type !== 'KEY';
-        updateOutput();
+        updateOutput(entry.action);
     });
     row.append(type.element, value, capture, remove);
     return row;
 }
 
-function render() {
+function render(editedAction) {
     const container = byId('mappings');
     container.replaceChildren();
     for (const group of groups) {
@@ -276,7 +276,7 @@ function render() {
             const heading = element('div', undefined, 'action-heading');
             const add = button(t('add'), t('addLabel', {action}), () => {
                 entries.push({action, type: 'KEY', value: ''});
-                render();
+                render(action);
                 const rows = document.querySelectorAll(`[data-action="${action}"] .binding`);
                 rows[rows.length - 1].querySelectorAll('.dropdown-trigger')[1].focus();
             });
@@ -300,14 +300,27 @@ function render() {
         }
         container.append(section);
     }
-    updateOutput();
+    updateOutput(editedAction);
 }
 
-function filterActions() {
+function matchesSearch(group, action, search, inputActions) {
+    const label = `${group} ${groupLabel(group)} ${action}`.toLowerCase();
+    return label.includes(search) || inputActions.has(action);
+}
+
+function filterActions(editedAction) {
     const searchField = byId('search');
-    const search = searchField.value.trim().toLowerCase();
+    let search = searchField.value.trim().toLowerCase();
     const focusedAction = document.activeElement?.closest('.action');
     const inputActions = actionsForInput(search, entries);
+    if (search && editedAction) {
+        const group = groups.find(group => group.actions.includes(editedAction));
+        if (!matchesSearch(group.name, editedAction, search, inputActions)) {
+            selectedGroup = group.name;
+            searchField.value = '';
+            search = '';
+        }
+    }
     if (activeView === 'controls') byId('group-title').textContent = search ? t('search') : groupLabel(selectedGroup);
     for (const category of byId('categories').children) {
         category.setAttribute('aria-pressed', String(!search && category.dataset.group === selectedGroup));
@@ -316,8 +329,7 @@ function filterActions() {
     for (const section of document.querySelectorAll('.group')) {
         let matches = 0;
         for (const action of section.querySelectorAll('.action')) {
-            const label = `${section.dataset.group} ${groupLabel(section.dataset.group)} ${action.dataset.action}`.toLowerCase();
-            action.hidden = search ? !label.includes(search) && !inputActions.has(action.dataset.action) : section.dataset.group !== selectedGroup;
+            action.hidden = search ? !matchesSearch(section.dataset.group, action.dataset.action, search, inputActions) : section.dataset.group !== selectedGroup;
             if (!action.hidden) matches++;
         }
         section.hidden = matches === 0;
@@ -333,7 +345,7 @@ function filterActions() {
     if (focusedAction?.hidden) searchField.focus({preventScroll: true});
 }
 
-function updateOutput() {
+function updateOutput(editedAction) {
     const result = validate(entries);
     const valid = result.errors.length === 0;
     byId('preview').value = valid ? configurationText() : '';
@@ -359,7 +371,7 @@ function updateOutput() {
         const invalid = result.errors.some(error => entries[error.index] === renderedEntries[index]);
         for (const control of row.querySelectorAll('.dropdown-trigger')) control.setAttribute('aria-invalid', String(invalid));
     });
-    filterActions();
+    filterActions(editedAction);
 }
 
 function cancelCapture(message) {
@@ -395,12 +407,12 @@ window.addEventListener('keydown', event => {
     target.value = result.value;
     cancelCapture();
     bindingControls.get(target)?.setValue(result.value);
-    updateOutput();
+    updateOutput(target.action);
     setStatus('captured', {value: result.value, action: target.action});
 }, true);
 
-byId('search').addEventListener('input', filterActions);
-byId('profile-title-id').addEventListener('input', updateOutput);
+byId('search').addEventListener('input', () => filterActions());
+byId('profile-title-id').addEventListener('input', () => updateOutput());
 byId('reset').addEventListener('click', async () => {
     if (!await confirmReplacement()) return;
     entries = [];
@@ -435,6 +447,8 @@ byId('file').addEventListener('change', async event => {
         entries = result.entries;
         settings = result.settings;
         controllerRemaps = result.controllerRemaps;
+        const titleId = titleIdFromFilename(file.name);
+        if (titleId !== undefined) byId('profile-title-id').value = titleId;
         savedConfiguration = snapshot();
         render();
         setStatus('imported', {name: file.name});
